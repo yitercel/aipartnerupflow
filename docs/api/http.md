@@ -639,6 +639,478 @@ curl -X POST http://localhost:8000/tasks \
   }'
 ```
 
+## CustomA2AStarletteApplication Custom Routes
+
+The `CustomA2AStarletteApplication` extends the standard A2A Starlette Application with additional custom routes for task management and system operations.
+
+### Custom Routes Overview
+
+The custom application adds the following routes:
+
+1. **`POST /tasks`** - Task management endpoint (see [Task Management Endpoints](#task-management-endpoints))
+2. **`POST /system`** - System operations endpoint (see [System Endpoints](#system-endpoints))
+
+These routes are enabled by default when using `CustomA2AStarletteApplication`. To disable them, set `enable_system_routes=False` when creating the application.
+
+### Initialization
+
+```python
+from aipartnerupflow.api.a2a.server import create_a2a_server
+
+# Create A2A server with custom routes enabled (default)
+app = create_a2a_server(
+    verify_token_secret_key="your-secret-key",  # Optional: JWT authentication
+    base_url="http://localhost:8000",
+    enable_system_routes=True  # Enable custom routes (default: True)
+)
+```
+
+### JWT Authentication
+
+The custom application supports optional JWT authentication via middleware:
+
+```python
+from aipartnerupflow.api.a2a.server import create_a2a_server
+
+def verify_token(token: str) -> Optional[dict]:
+    """Custom JWT token verification function"""
+    # Your token verification logic
+    return payload if valid else None
+
+app = create_a2a_server(
+    verify_token_func=verify_token,
+    enable_system_routes=True
+)
+```
+
+## A2A Protocol Features
+
+### Push Notification Configuration (Callback Mode)
+
+The A2A protocol supports push notifications via `configuration.push_notification_config`. This allows the server to send task execution updates to a callback URL instead of waiting for polling.
+
+#### How It Works
+
+When `configuration.push_notification_config` is provided in the A2A request, the server will:
+
+1. Execute tasks in **callback mode** (asynchronous)
+2. Send task status updates to the configured callback URL
+3. Return immediately with an initial response
+
+#### Configuration Format
+
+The `push_notification_config` should be included in the request's `configuration` field:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "execute_task_tree",
+  "params": {
+    "tasks": [...]
+  },
+  "configuration": {
+    "push_notification_config": {
+      "url": "https://your-server.com/callback",
+      "headers": {
+        "Authorization": "Bearer your-token"
+      }
+    }
+  },
+  "id": "request-123"
+}
+```
+
+#### Push Notification Config Fields
+
+- `url` (string, required): Callback URL where status updates will be sent
+- `headers` (object, optional): HTTP headers to include in callback requests
+- `method` (string, optional): HTTP method for callback (default: "POST")
+
+#### Callback Payload Format
+
+The server will send POST requests to your callback URL with the following payload:
+
+```json
+{
+  "task_id": "task-abc-123",
+  "context_id": "context-xyz-456",
+  "status": {
+    "state": "completed",
+    "message": {
+      "role": "agent",
+      "parts": [
+        {
+          "kind": "data",
+          "data": {
+            "status": "completed",
+            "progress": 1.0,
+            "root_task_id": "task-abc-123",
+            "task_count": 2
+          }
+        }
+      ]
+    }
+  },
+  "final": true
+}
+```
+
+#### Example: Using Push Notifications
+
+**Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "execute_task_tree",
+  "params": {
+    "tasks": [
+      {
+        "id": "task-1",
+        "name": "Task 1",
+        "user_id": "user123",
+        "schemas": {
+          "method": "system_info_executor"
+        },
+        "inputs": {}
+      }
+    ]
+  },
+  "configuration": {
+    "push_notification_config": {
+      "url": "https://my-app.com/api/task-callback",
+      "headers": {
+        "Authorization": "Bearer my-api-token",
+        "Content-Type": "application/json"
+      }
+    }
+  },
+  "id": "request-123"
+}
+```
+
+**Immediate Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "request-123",
+  "result": {
+    "status": "in_progress",
+    "root_task_id": "task-1",
+    "task_count": 1
+  }
+}
+```
+
+**Callback Request (sent to your URL):**
+```json
+{
+  "task_id": "task-1",
+  "context_id": "context-123",
+  "status": {
+    "state": "completed",
+    "message": {
+      "role": "agent",
+      "parts": [
+        {
+          "kind": "data",
+          "data": {
+            "status": "completed",
+            "progress": 1.0,
+            "root_task_id": "task-1"
+          }
+        }
+      ]
+    }
+  },
+  "final": true
+}
+```
+
+### Streaming Mode
+
+The A2A protocol also supports streaming mode via `metadata.stream`. When enabled, the server will send multiple status update events through the EventQueue (SSE/WebSocket).
+
+**Request with Streaming:**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "execute_task_tree",
+  "params": {
+    "tasks": [...]
+  },
+  "metadata": {
+    "stream": true
+  },
+  "id": "request-123"
+}
+```
+
+## A2A Client SDK Usage
+
+The A2A protocol provides an official client SDK for easy integration. This section demonstrates how to use the A2A client SDK to interact with aipartnerupflow.
+
+### Installation
+
+```bash
+pip install a2a
+```
+
+### Basic Usage
+
+```python
+from a2a.client import ClientFactory, ClientConfig
+from a2a.types import Message, DataPart, Role
+import httpx
+import uuid
+
+# Create HTTP client
+httpx_client = httpx.AsyncClient(base_url="http://localhost:8000")
+
+# Create A2A client config
+config = ClientConfig(
+    streaming=True,  # Enable streaming mode
+    polling=False,
+    httpx_client=httpx_client
+)
+
+# Create client factory
+factory = ClientFactory(config=config)
+
+# Fetch agent card
+from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
+card_response = await httpx_client.get(AGENT_CARD_WELL_KNOWN_PATH)
+agent_card = AgentCard(**card_response.json())
+
+# Create A2A client
+client = factory.create(card=agent_card)
+```
+
+### Executing Tasks
+
+#### Simple Mode (Synchronous)
+
+```python
+# Prepare task data
+task_data = {
+    "id": "task-1",
+    "name": "My Task",
+    "user_id": "user123",
+    "schemas": {
+        "method": "system_info_executor"
+    },
+    "inputs": {}
+}
+
+# Create A2A message
+data_part = DataPart(kind="data", data={"tasks": [task_data]})
+message = Message(
+    message_id=str(uuid.uuid4()),
+    role=Role.user,
+    parts=[data_part]
+)
+
+# Send message and get response
+responses = []
+async for response in client.send_message(message):
+    responses.append(response)
+    if isinstance(response, Message):
+        # Extract result from response
+        for part in response.parts:
+            if part.kind == "data" and isinstance(part.data, dict):
+                result = part.data
+                print(f"Task status: {result.get('status')}")
+                print(f"Progress: {result.get('progress')}")
+```
+
+#### Streaming Mode
+
+```python
+# Create message with streaming enabled
+message = Message(
+    message_id=str(uuid.uuid4()),
+    role=Role.user,
+    parts=[data_part]
+)
+
+# Send message - will receive multiple updates
+async for response in client.send_message(message):
+    if isinstance(response, Message):
+        # Process streaming updates
+        for part in response.parts:
+            if part.kind == "data":
+                update = part.data
+                print(f"Update: {update}")
+    elif isinstance(response, tuple):
+        # Response is (Task, Update) tuple
+        task, update = response
+        print(f"Task {task.id}: {update}")
+```
+
+#### Using Push Notifications (Callback Mode)
+
+```python
+from a2a.types import Configuration, PushNotificationConfig
+
+# Create push notification config
+push_config = PushNotificationConfig(
+    url="https://your-server.com/callback",
+    headers={
+        "Authorization": "Bearer your-token"
+    }
+)
+
+# Create configuration
+configuration = Configuration(
+    push_notification_config=push_config
+)
+
+# Create message with configuration
+message = Message(
+    message_id=str(uuid.uuid4()),
+    role=Role.user,
+    parts=[data_part],
+    configuration=configuration
+)
+
+# Send message - server will use callback mode
+# Response will be immediate, updates sent to callback URL
+async for response in client.send_message(message):
+    # Initial response only
+    print(f"Initial response: {response}")
+    break  # Only expect initial response in callback mode
+```
+
+### Task Tree with Dependencies
+
+```python
+# Create task tree with dependencies
+tasks = [
+    {
+        "id": "parent-task",
+        "name": "Parent Task",
+        "user_id": "user123",
+        "dependencies": [
+            {"id": "child-1", "required": True},
+            {"id": "child-2", "required": True}
+        ],
+        "schemas": {
+            "method": "aggregate_results_executor"
+        },
+        "inputs": {}
+    },
+    {
+        "id": "child-1",
+        "name": "Child Task 1",
+        "parent_id": "parent-task",
+        "user_id": "user123",
+        "schemas": {
+            "method": "system_info_executor"
+        },
+        "inputs": {"resource": "cpu"}
+    },
+    {
+        "id": "child-2",
+        "name": "Child Task 2",
+        "parent_id": "parent-task",
+        "user_id": "user123",
+        "dependencies": [{"id": "child-1", "required": True}],
+        "schemas": {
+            "method": "system_info_executor"
+        },
+        "inputs": {"resource": "memory"}
+    }
+]
+
+# Create message with task tree
+data_part = DataPart(kind="data", data={"tasks": tasks})
+message = Message(
+    message_id=str(uuid.uuid4()),
+    role=Role.user,
+    parts=[data_part]
+)
+
+# Execute task tree
+async for response in client.send_message(message):
+    # Process responses
+    pass
+```
+
+### Error Handling
+
+```python
+try:
+    async for response in client.send_message(message):
+        # Process responses
+        pass
+except Exception as e:
+    print(f"Error: {e}")
+    # Handle error appropriately
+```
+
+### Complete Example
+
+```python
+import asyncio
+from a2a.client import ClientFactory, ClientConfig
+from a2a.types import Message, DataPart, Role, AgentCard
+import httpx
+import uuid
+
+async def main():
+    # Setup
+    httpx_client = httpx.AsyncClient(base_url="http://localhost:8000")
+    config = ClientConfig(streaming=True, httpx_client=httpx_client)
+    factory = ClientFactory(config=config)
+    
+    # Get agent card
+    card_response = await httpx_client.get("/.well-known/agent-card")
+    agent_card = AgentCard(**card_response.json())
+    client = factory.create(card=agent_card)
+    
+    # Create task
+    task_data = {
+        "id": "my-task",
+        "name": "My Task",
+        "user_id": "user123",
+        "schemas": {"method": "system_info_executor"},
+        "inputs": {}
+    }
+    
+    # Create message
+    message = Message(
+        message_id=str(uuid.uuid4()),
+        role=Role.user,
+        parts=[DataPart(kind="data", data={"tasks": [task_data]})]
+    )
+    
+    # Execute and process responses
+    async for response in client.send_message(message):
+        if isinstance(response, Message):
+            for part in response.parts:
+                if part.kind == "data":
+                    print(f"Result: {part.data}")
+    
+    await httpx_client.aclose()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## A2A Protocol Documentation
+
+For detailed information about the A2A Protocol, please refer to the official documentation:
+
+- **A2A Protocol Official Documentation**: [https://www.a2aprotocol.org/en/docs](https://www.a2aprotocol.org/en/docs)
+- **A2A Protocol Homepage**: [https://www.a2aprotocol.org](https://www.a2aprotocol.org)
+
+These resources provide comprehensive information about:
+- A2A Protocol core concepts and architecture
+- Protocol specifications and data formats
+- Client SDK API reference
+- Best practices and examples
+- Security and authentication
+- Push notifications and streaming
+
 ## See Also
 
 - [A2A Protocol Specification](https://github.com/aipartnerup/a2a-protocol)

@@ -603,9 +603,212 @@ tree.add_child(TaskTreeNode(task2))
 await task_manager.distribute_task_tree(tree)
 ```
 
+## A2A Protocol Integration
+
+aipartnerupflow implements the A2A (Agent-to-Agent) Protocol standard, allowing seamless integration with other A2A-compatible agents and services.
+
+### Using A2A Client SDK
+
+The A2A protocol provides an official client SDK for easy integration. Here's how to use it with aipartnerupflow:
+
+#### Installation
+
+```bash
+pip install a2a
+```
+
+#### Basic Example
+
+```python
+from a2a.client import ClientFactory, ClientConfig
+from a2a.types import Message, DataPart, Role, AgentCard
+import httpx
+import uuid
+import asyncio
+
+async def execute_task_via_a2a():
+    # Create HTTP client
+    httpx_client = httpx.AsyncClient(base_url="http://localhost:8000")
+    
+    # Create A2A client config
+    config = ClientConfig(
+        streaming=True,
+        polling=False,
+        httpx_client=httpx_client
+    )
+    
+    # Create client factory
+    factory = ClientFactory(config=config)
+    
+    # Fetch agent card
+    from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
+    card_response = await httpx_client.get(AGENT_CARD_WELL_KNOWN_PATH)
+    agent_card = AgentCard(**card_response.json())
+    
+    # Create A2A client
+    client = factory.create(card=agent_card)
+    
+    # Prepare task data
+    task_data = {
+        "id": "task-1",
+        "name": "My Task",
+        "user_id": "user123",
+        "schemas": {
+            "method": "system_info_executor"
+        },
+        "inputs": {}
+    }
+    
+    # Create A2A message
+    data_part = DataPart(kind="data", data={"tasks": [task_data]})
+    message = Message(
+        message_id=str(uuid.uuid4()),
+        role=Role.user,
+        parts=[data_part]
+    )
+    
+    # Send message and process responses
+    async for response in client.send_message(message):
+        if isinstance(response, Message):
+            for part in response.parts:
+                if part.kind == "data" and isinstance(part.data, dict):
+                    result = part.data
+                    print(f"Status: {result.get('status')}")
+                    print(f"Progress: {result.get('progress')}")
+    
+    await httpx_client.aclose()
+
+# Run
+asyncio.run(execute_task_via_a2a())
+```
+
+### Push Notification Configuration
+
+You can use push notifications to receive task execution updates via callback URL:
+
+```python
+from a2a.types import Configuration, PushNotificationConfig
+
+# Create push notification config
+push_config = PushNotificationConfig(
+    url="https://your-server.com/callback",
+    headers={
+        "Authorization": "Bearer your-token"
+    }
+)
+
+# Create configuration
+configuration = Configuration(
+    push_notification_config=push_config
+)
+
+# Create message with configuration
+message = Message(
+    message_id=str(uuid.uuid4()),
+    role=Role.user,
+    parts=[data_part],
+    configuration=configuration
+)
+
+# Send message - server will use callback mode
+async for response in client.send_message(message):
+    # Initial response only
+    print(f"Initial response: {response}")
+    break
+```
+
+The server will send task status updates to your callback URL as the task executes.
+
+### Streaming Mode
+
+Enable streaming mode to receive real-time progress updates:
+
+```python
+# Create message with streaming enabled via metadata
+message = Message(
+    message_id=str(uuid.uuid4()),
+    role=Role.user,
+    parts=[data_part],
+    metadata={"stream": True}
+)
+
+# Send message - will receive multiple updates
+async for response in client.send_message(message):
+    if isinstance(response, Message):
+        # Process streaming updates
+        for part in response.parts:
+            if part.kind == "data":
+                update = part.data
+                print(f"Update: {update}")
+```
+
+### Task Tree Execution
+
+Execute complex task trees with dependencies:
+
+```python
+tasks = [
+    {
+        "id": "parent-task",
+        "name": "Parent Task",
+        "user_id": "user123",
+        "dependencies": [
+            {"id": "child-1", "required": True},
+            {"id": "child-2", "required": True}
+        ],
+        "schemas": {
+            "method": "aggregate_results_executor"
+        },
+        "inputs": {}
+    },
+    {
+        "id": "child-1",
+        "name": "Child Task 1",
+        "parent_id": "parent-task",
+        "user_id": "user123",
+        "schemas": {
+            "method": "system_info_executor"
+        },
+        "inputs": {"resource": "cpu"}
+    },
+    {
+        "id": "child-2",
+        "name": "Child Task 2",
+        "parent_id": "parent-task",
+        "user_id": "user123",
+        "dependencies": [{"id": "child-1", "required": True}],
+        "schemas": {
+            "method": "system_info_executor"
+        },
+        "inputs": {"resource": "memory"}
+    }
+]
+
+# Create message with task tree
+data_part = DataPart(kind="data", data={"tasks": tasks})
+message = Message(
+    message_id=str(uuid.uuid4()),
+    role=Role.user,
+    parts=[data_part]
+)
+
+# Execute task tree
+async for response in client.send_message(message):
+    # Process responses
+    pass
+```
+
+### A2A Protocol Documentation
+
+For detailed information about the A2A Protocol, please refer to the official documentation:
+
+- **A2A Protocol Official Documentation**: [https://www.a2aprotocol.org/en/docs](https://www.a2aprotocol.org/en/docs)
+- **A2A Protocol Homepage**: [https://www.a2aprotocol.org](https://www.a2aprotocol.org)
+
 ## See Also
 
 - [Task Orchestration Guide](../guides/task-orchestration.md)
 - [Custom Tasks Guide](../guides/custom-tasks.md)
 - [Architecture Documentation](../architecture/overview.md)
+- [HTTP API Reference](./http.md)
 
