@@ -173,16 +173,10 @@ class TaskCreator:
                 task_names.add(task_name)
                 task_name_to_index[task_name] = index
         
-        # Step 2: Create all tasks first
-        created_tasks: List[TaskModel] = []
-        identifier_to_task: Dict[str, TaskModel] = {}  # id or name -> TaskModel
-        
+        # Step 2: Validate all tasks first (parent_id, dependencies)
         for index, task_data in enumerate(tasks):
             task_name = task_data.get("name")
             provided_id = task_data.get("id")
-            
-            # user_id is optional (can be None) - get directly from task_data
-            task_user_id = task_data.get("user_id")
             
             # Validate parent_id exists in the array (if provided)
             # parent_id can be either id (if tasks have id) or name (if tasks don't have id)
@@ -203,16 +197,38 @@ class TaskCreator:
                     dependencies, task_name, index, provided_ids, provided_id_to_index,
                     task_names, task_name_to_index
                 )
+        
+        # Step 2.5: Detect circular dependencies before creating tasks
+        self._detect_circular_dependencies(
+            tasks, provided_ids, provided_id_to_index, task_names, task_name_to_index
+        )
+        
+        # Step 2.6: Validate dependent task inclusion
+        # Ensure all tasks that depend on tasks in the tree are also included
+        self._validate_dependent_task_inclusion(
+            tasks, provided_ids, task_names
+        )
+        
+        # Step 3: Create all tasks
+        created_tasks: List[TaskModel] = []
+        identifier_to_task: Dict[str, TaskModel] = {}  # id or name -> TaskModel
+        
+        for index, task_data in enumerate(tasks):
+            task_name = task_data.get("name")
+            provided_id = task_data.get("id")
             
-            # Create task (parent_id and dependencies will be set in step 3)
+            # user_id is optional (can be None) - get directly from task_data
+            task_user_id = task_data.get("user_id")
+            
+            # Create task (parent_id and dependencies will be set in step 4)
             # Pass id if provided (as optional parameter)
             logger.debug(f"Creating task: name={task_name}, provided_id={provided_id}")
             task = await self.task_manager.task_repository.create_task(
                 name=task_name,
                 user_id=task_user_id,
-                parent_id=None,  # Will be set in step 3
+                parent_id=None,  # Will be set in step 4
                 priority=task_data.get("priority", 1),
-                dependencies=None,  # Will be set in step 3
+                dependencies=None,  # Will be set in step 4
                 inputs=task_data.get("inputs"),
                 schemas=task_data.get("schemas"),
                 params=task_data.get("params"),
@@ -244,7 +260,7 @@ class TaskCreator:
                 # Use name as identifier when id is not provided
                 identifier_to_task[task_name] = task
         
-        # Step 3: Set parent_id and dependencies using actual task ids
+        # Step 4: Set parent_id and dependencies using actual task ids
         for index, (task_data, task) in enumerate(zip(tasks, created_tasks)):
             # Resolve parent_id (can be id or name, depending on whether tasks have id)
             # If tasks have id: parent_id should be an id
@@ -333,18 +349,52 @@ class TaskCreator:
                     self.db.commit()
                     self.db.refresh(task)
         
-        # Step 4: Build task tree structure
+        # Step 5: Build task tree structure
         # Find root task (task with no parent_id)
-        root_task = None
-        for task in created_tasks:
-            if task.parent_id is None:
-                root_task = task
-                break
+        root_tasks = [task for task in created_tasks if task.parent_id is None]
         
-        if not root_task:
+        if not root_tasks:
             raise ValueError(
                 "No root task found (task with no parent_id). "
                 "At least one task in the array must have parent_id=None or no parent_id field."
+            )
+        
+        if len(root_tasks) > 1:
+            root_task_names = [task.name for task in root_tasks]
+            raise ValueError(
+                f"Multiple root tasks found: {root_task_names}. "
+                f"All tasks must be in a single task tree. "
+                f"Only one task should have parent_id=None or no parent_id field."
+            )
+        
+        root_task = root_tasks[0]
+        
+        # Verify all tasks are reachable from the root task (in the same tree)
+        # Build a set of all task IDs that are reachable from root
+        reachable_task_ids: Set[str] = {root_task.id}
+        
+        def collect_reachable_tasks(task_id: str):
+            """Recursively collect all tasks reachable from the given task via parent_id chain"""
+            for task in created_tasks:
+                if task.parent_id == task_id and task.id not in reachable_task_ids:
+                    reachable_task_ids.add(task.id)
+                    collect_reachable_tasks(task.id)
+        
+        collect_reachable_tasks(root_task.id)
+        
+        # Check if all tasks are reachable
+        all_task_ids = {task.id for task in created_tasks}
+        unreachable_task_ids = all_task_ids - reachable_task_ids
+        
+        if unreachable_task_ids:
+            unreachable_task_names = [
+                task.name for task in created_tasks 
+                if task.id in unreachable_task_ids
+            ]
+            raise ValueError(
+                f"Tasks not in the same tree: {unreachable_task_names}. "
+                f"All tasks must be reachable from the root task via parent_id chain. "
+                f"These tasks are not connected to the root task '{root_task.name}'."
             )
         
         root_node = await self._build_task_tree(root_task, created_tasks)
@@ -412,6 +462,273 @@ class TaskCreator:
                         f"Task '{task_name}' at index {task_index} has dependency '{dep_ref}' "
                         f"which is not in the tasks array (not found as id or name)"
                     )
+    
+    def _detect_circular_dependencies(
+        self,
+        tasks: List[Dict[str, Any]],
+        provided_ids: Set[str],
+        id_to_index: Dict[str, int],
+        task_names: Set[str],
+        name_to_index: Dict[str, int]
+    ) -> None:
+        """
+        Detect circular dependencies in task array using DFS.
+        
+        Args:
+            tasks: List of task dictionaries
+            provided_ids: Set of all provided task IDs
+            id_to_index: Map of id -> index in array
+            task_names: Set of all task names
+            name_to_index: Map of name -> index in array
+            
+        Raises:
+            ValueError: If circular dependencies are detected
+        """
+        # Build dependency graph: identifier -> set of identifiers it depends on
+        dependency_graph: Dict[str, Set[str]] = {}
+        identifier_to_name: Dict[str, str] = {}  # identifier -> task name for error messages
+        
+        for index, task_data in enumerate(tasks):
+            task_name = task_data.get("name")
+            provided_id = task_data.get("id")
+            
+            # Use id if provided, otherwise use name as identifier
+            identifier = provided_id if provided_id else task_name
+            identifier_to_name[identifier] = task_name
+            
+            # Initialize empty set for this task
+            dependency_graph[identifier] = set()
+            
+            # Collect all dependencies for this task
+            dependencies = task_data.get("dependencies")
+            if dependencies:
+                for dep in dependencies:
+                    if isinstance(dep, dict):
+                        dep_ref = dep.get("id") or dep.get("name")
+                        if dep_ref:
+                            dependency_graph[identifier].add(dep_ref)
+                    else:
+                        dep_ref = str(dep)
+                        dependency_graph[identifier].add(dep_ref)
+        
+        # DFS to detect cycles
+        # visited: all nodes we've visited (completely processed)
+        # rec_stack: nodes in current recursion stack (path from root, indicates potential cycle)
+        visited: Set[str] = set()
+        
+        def dfs(node: str, path: List[str]) -> Optional[List[str]]:
+            """
+            DFS to detect cycles.
+            
+            Args:
+                node: Current node being visited
+                path: Current path from root to this node
+            
+            Returns:
+                Cycle path if cycle detected, None otherwise
+            """
+            if node in path:
+                # Found a cycle - extract the cycle path
+                cycle_start = path.index(node)
+                cycle = path[cycle_start:] + [node]  # Complete the cycle
+                return cycle
+            
+            if node in visited:
+                # Already processed this node completely, no cycle from here
+                return None
+            
+            # Mark as visited and add to current path
+            visited.add(node)
+            path.append(node)
+            
+            # Visit all dependencies
+            # Only visit dependencies that exist in the graph (should have been validated already)
+            node_deps = dependency_graph.get(node, set())
+            for dep in node_deps:
+                # Skip if dependency is not in the graph (shouldn't happen after validation, but be safe)
+                if dep not in dependency_graph:
+                    continue
+                cycle = dfs(dep, path)
+                if cycle:
+                    return cycle
+            
+            # Remove from current path (backtrack)
+            path.pop()
+            return None
+        
+        # Check all nodes for cycles
+        for identifier in dependency_graph.keys():
+            if identifier not in visited:
+                cycle_path = dfs(identifier, [])
+                if cycle_path:
+                    # Format cycle path with task names for better error message
+                    cycle_names = [identifier_to_name.get(id, id) for id in cycle_path]
+                    raise ValueError(
+                        f"Circular dependency detected: {' -> '.join(cycle_names)}. "
+                        f"Tasks cannot have circular dependencies as this would cause infinite loops."
+                    )
+    
+    def _find_dependent_tasks(
+        self,
+        task_identifier: str,
+        all_tasks: List[Dict[str, Any]],
+        provided_ids: Set[str],
+        task_names: Set[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Find all tasks that depend on the specified task identifier.
+        
+        Args:
+            task_identifier: Task identifier (id or name) to find dependents for
+            all_tasks: All tasks in the array
+            provided_ids: Set of all provided task IDs
+            task_names: Set of all task names
+            
+        Returns:
+            List of tasks that depend on the specified task identifier
+        """
+        dependent_tasks = []
+        
+        for task_data in all_tasks:
+            dependencies = task_data.get("dependencies")
+            if not dependencies:
+                continue
+            
+            # Check if this task depends on the specified task_identifier
+            for dep in dependencies:
+                if isinstance(dep, dict):
+                    dep_ref = dep.get("id") or dep.get("name")
+                    if dep_ref == task_identifier:
+                        dependent_tasks.append(task_data)
+                        break
+                else:
+                    dep_ref = str(dep)
+                    if dep_ref == task_identifier:
+                        dependent_tasks.append(task_data)
+                        break
+        
+        return dependent_tasks
+    
+    def _find_transitive_dependents(
+        self,
+        task_identifiers: Set[str],
+        all_tasks: List[Dict[str, Any]],
+        provided_ids: Set[str],
+        task_names: Set[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Find all tasks that depend on any of the specified task identifiers (including transitive).
+        
+        Args:
+            task_identifiers: Set of task identifiers (id or name) to find dependents for
+            all_tasks: All tasks in the array
+            provided_ids: Set of all provided task IDs
+            task_names: Set of all task names
+            
+        Returns:
+            List of tasks that depend on any of the specified task identifiers (directly or transitively)
+        """
+        # Track all dependent tasks found (to avoid duplicates)
+        found_dependents: Set[int] = set()  # Track by index to avoid duplicates
+        dependent_tasks: List[Dict[str, Any]] = []
+        
+        # Start with the initial set of task identifiers
+        current_identifiers = task_identifiers.copy()
+        processed_identifiers: Set[str] = set()
+        
+        # Recursively find all transitive dependents
+        while current_identifiers:
+            next_identifiers: Set[str] = set()
+            
+            for identifier in current_identifiers:
+                if identifier in processed_identifiers:
+                    continue
+                processed_identifiers.add(identifier)
+                
+                # Find direct dependents
+                for index, task_data in enumerate(all_tasks):
+                    if index in found_dependents:
+                        continue
+                    
+                    dependencies = task_data.get("dependencies")
+                    if not dependencies:
+                        continue
+                    
+                    # Check if this task depends on the current identifier
+                    depends_on_identifier = False
+                    for dep in dependencies:
+                        if isinstance(dep, dict):
+                            dep_ref = dep.get("id") or dep.get("name")
+                            if dep_ref == identifier:
+                                depends_on_identifier = True
+                                break
+                        else:
+                            dep_ref = str(dep)
+                            if dep_ref == identifier:
+                                depends_on_identifier = True
+                                break
+                    
+                    if depends_on_identifier:
+                        found_dependents.add(index)
+                        dependent_tasks.append(task_data)
+                        
+                        # Add this task's identifier to next iteration
+                        task_identifier = task_data.get("id") or task_data.get("name")
+                        if task_identifier and task_identifier not in processed_identifiers:
+                            next_identifiers.add(task_identifier)
+            
+            current_identifiers = next_identifiers
+        
+        return dependent_tasks
+    
+    def _validate_dependent_task_inclusion(
+        self,
+        tasks: List[Dict[str, Any]],
+        provided_ids: Set[str],
+        task_names: Set[str]
+    ) -> None:
+        """
+        Validate that all tasks that depend on tasks in the tree are also included.
+        
+        Args:
+            tasks: List of task dictionaries
+            provided_ids: Set of all provided task IDs
+            task_names: Set of all task names
+            
+        Raises:
+            ValueError: If dependent tasks are missing
+        """
+        # Collect all task identifiers in the current tree
+        tree_identifiers: Set[str] = set()
+        for task_data in tasks:
+            provided_id = task_data.get("id")
+            task_name = task_data.get("name")
+            if provided_id:
+                tree_identifiers.add(provided_id)
+            else:
+                tree_identifiers.add(task_name)
+        
+        # Find all tasks that depend on tasks in the tree (including transitive)
+        all_dependent_tasks = self._find_transitive_dependents(
+            tree_identifiers, tasks, provided_ids, task_names
+        )
+        
+        # Check if all dependent tasks are included in the tree
+        included_identifiers = tree_identifiers.copy()
+        missing_dependents = []
+        
+        for dep_task in all_dependent_tasks:
+            dep_identifier = dep_task.get("id") or dep_task.get("name")
+            if dep_identifier and dep_identifier not in included_identifiers:
+                missing_dependents.append(dep_task)
+        
+        if missing_dependents:
+            missing_names = [task.get("name", "Unknown") for task in missing_dependents]
+            raise ValueError(
+                f"Missing dependent tasks: {missing_names}. "
+                f"All tasks that depend on tasks in the tree must be included. "
+                f"These tasks depend on tasks in the tree but are not included in the tasks array."
+            )
     
     async def _build_task_tree(
         self,

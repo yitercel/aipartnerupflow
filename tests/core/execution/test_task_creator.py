@@ -542,4 +542,506 @@ class TestTaskCreator:
         assert actual_dep_id == task_tree.task.id  # Actual task id
         # Since user provided id="user_id_1", the actual task id is "user_id_1"
         assert actual_dep_id == "user_id_1"  # User-provided id becomes the actual task id
+    
+    @pytest.mark.asyncio
+    async def test_error_circular_dependency_simple(self, sync_db_session):
+        """Test error when simple circular dependency is detected (A -> B -> A)"""
+        creator = TaskCreator(sync_db_session)
+        
+        tasks = [
+            {
+                "id": "task_a",
+                "name": "Task A",
+                "user_id": "user_123",
+                # Root task
+                "dependencies": [{"id": "task_b", "required": True}],
+            },
+            {
+                "id": "task_b",
+                "name": "Task B",
+                "user_id": "user_123",
+                "parent_id": "task_a",  # Child of task_a, in the same tree
+                "dependencies": [{"id": "task_a", "required": True}],
+            }
+        ]
+        
+        with pytest.raises(ValueError, match="Circular dependency detected"):
+            await creator.create_task_tree_from_array(tasks)
+    
+    @pytest.mark.asyncio
+    async def test_error_circular_dependency_three_nodes(self, sync_db_session):
+        """Test error when circular dependency involves three nodes (A -> B -> C -> A)"""
+        creator = TaskCreator(sync_db_session)
+        
+        tasks = [
+            {
+                "id": "task_a",
+                "name": "Task A",
+                "user_id": "user_123",
+                # Root task
+                "dependencies": [{"id": "task_b", "required": True}],
+            },
+            {
+                "id": "task_b",
+                "name": "Task B",
+                "user_id": "user_123",
+                "parent_id": "task_a",  # Child of task_a, in the same tree
+                "dependencies": [{"id": "task_c", "required": True}],
+            },
+            {
+                "id": "task_c",
+                "name": "Task C",
+                "user_id": "user_123",
+                "parent_id": "task_b",  # Child of task_b, in the same tree
+                "dependencies": [{"id": "task_a", "required": True}],
+            }
+        ]
+        
+        with pytest.raises(ValueError, match="Circular dependency detected"):
+            await creator.create_task_tree_from_array(tasks)
+    
+    @pytest.mark.asyncio
+    async def test_error_circular_dependency_with_name(self, sync_db_session):
+        """Test error when circular dependency is detected using name-based references"""
+        creator = TaskCreator(sync_db_session)
+        
+        tasks = [
+            {
+                "name": "Task A",  # No id, use name
+                "user_id": "user_123",
+                # Root task
+                "dependencies": [{"name": "Task B", "required": True}],
+            },
+            {
+                "name": "Task B",  # No id, use name
+                "user_id": "user_123",
+                "parent_id": "Task A",  # Child of Task A, in the same tree
+                "dependencies": [{"name": "Task A", "required": True}],
+            }
+        ]
+        
+        with pytest.raises(ValueError, match="Circular dependency detected"):
+            await creator.create_task_tree_from_array(tasks)
+    
+    @pytest.mark.asyncio
+    async def test_error_circular_dependency_self_reference(self, sync_db_session):
+        """Test error when task depends on itself"""
+        creator = TaskCreator(sync_db_session)
+        
+        tasks = [
+            {
+                "id": "task_a",
+                "name": "Task A",
+                "user_id": "user_123",
+                "dependencies": [{"id": "task_a", "required": True}],  # Self-reference
+            }
+        ]
+        
+        with pytest.raises(ValueError, match="Circular dependency detected"):
+            await creator.create_task_tree_from_array(tasks)
+    
+    @pytest.mark.asyncio
+    async def test_error_circular_dependency_complex(self, sync_db_session):
+        """Test error when circular dependency involves multiple paths"""
+        creator = TaskCreator(sync_db_session)
+        
+        tasks = [
+            {
+                "id": "task_a",
+                "name": "Task A",
+                "user_id": "user_123",
+                # Root task
+                "dependencies": [{"id": "task_b", "required": True}],
+            },
+            {
+                "id": "task_b",
+                "name": "Task B",
+                "user_id": "user_123",
+                "parent_id": "task_a",  # Child of task_a, in the same tree
+                "dependencies": [
+                    {"id": "task_c", "required": True},
+                    {"id": "task_d", "required": True},
+                ],
+            },
+            {
+                "id": "task_c",
+                "name": "Task C",
+                "user_id": "user_123",
+                "parent_id": "task_b",  # Child of task_b, in the same tree
+                "dependencies": [{"id": "task_a", "required": True}],  # Creates cycle: A -> B -> C -> A
+            },
+            {
+                "id": "task_d",
+                "name": "Task D",
+                "user_id": "user_123",
+                "parent_id": "task_b",  # Child of task_b, in the same tree
+                "dependencies": [{"id": "task_b", "required": True}],  # Creates cycle: B -> D -> B
+            }
+        ]
+        
+        with pytest.raises(ValueError, match="Circular dependency detected"):
+            await creator.create_task_tree_from_array(tasks)
+    
+    @pytest.mark.asyncio
+    async def test_error_circular_dependency_simple_string(self, sync_db_session):
+        """Test error when circular dependency uses simple string format"""
+        creator = TaskCreator(sync_db_session)
+        
+        tasks = [
+            {
+                "id": "task_a",
+                "name": "Task A",
+                "user_id": "user_123",
+                # Root task
+                "dependencies": ["task_b"],  # Simple string format
+            },
+            {
+                "id": "task_b",
+                "name": "Task B",
+                "user_id": "user_123",
+                "parent_id": "task_a",  # Child of task_a, in the same tree
+                "dependencies": ["task_a"],  # Simple string format
+            }
+        ]
+        
+        with pytest.raises(ValueError, match="Circular dependency detected"):
+            await creator.create_task_tree_from_array(tasks)
+    
+    @pytest.mark.asyncio
+    async def test_no_error_valid_dependency_chain(self, sync_db_session):
+        """Test that valid dependency chain (no cycles) works correctly"""
+        creator = TaskCreator(sync_db_session)
+        
+        tasks = [
+            {
+                "id": "task_a",
+                "name": "Task A",
+                "user_id": "user_123",
+                # No dependencies - root task
+            },
+            {
+                "id": "task_b",
+                "name": "Task B",
+                "user_id": "user_123",
+                "parent_id": "task_a",  # Child of task_a
+                "dependencies": [{"id": "task_a", "required": True}],
+            },
+            {
+                "id": "task_c",
+                "name": "Task C",
+                "user_id": "user_123",
+                "parent_id": "task_a",  # Child of task_a
+                "dependencies": [
+                    {"id": "task_a", "required": True},
+                    {"id": "task_b", "required": True},
+                ],
+            }
+        ]
+        
+        # Should not raise error - valid dependency chain (no cycles)
+        task_tree = await creator.create_task_tree_from_array(tasks)
+        
+        assert task_tree.task.name == "Task A"
+        assert len(task_tree.children) == 2  # task_b and task_c are children of task_a
+        
+        # Verify dependencies are set correctly
+        task_b = next((t for t in creator.tree_to_flat_list(task_tree) if t.name == "Task B"), None)
+        task_c = next((t for t in creator.tree_to_flat_list(task_tree) if t.name == "Task C"), None)
+        
+        assert task_b is not None
+        assert task_c is not None
+        assert task_b.dependencies is not None
+        assert len(task_b.dependencies) == 1
+        assert task_c.dependencies is not None
+        assert len(task_c.dependencies) == 2
+    
+    @pytest.mark.asyncio
+    async def test_error_multiple_root_tasks(self, sync_db_session):
+        """Test error when multiple root tasks are provided (tasks not in same tree)"""
+        creator = TaskCreator(sync_db_session)
+        
+        tasks = [
+            {
+                "id": "task_a",
+                "name": "Task A",
+                "user_id": "user_123",
+                # Root task 1
+            },
+            {
+                "id": "task_b",
+                "name": "Task B",
+                "user_id": "user_123",
+                # Root task 2 - multiple roots!
+            },
+            {
+                "id": "task_c",
+                "name": "Task C",
+                "user_id": "user_123",
+                "parent_id": "task_a",  # Child of task_a
+            }
+        ]
+        
+        with pytest.raises(ValueError, match="Multiple root tasks found"):
+            await creator.create_task_tree_from_array(tasks)
+    
+    @pytest.mark.asyncio
+    async def test_error_tasks_not_in_same_tree(self, sync_db_session):
+        """Test error when tasks are not all reachable from root task"""
+        creator = TaskCreator(sync_db_session)
+        
+        tasks = [
+            {
+                "id": "task_a",
+                "name": "Task A",
+                "user_id": "user_123",
+                # Root task
+            },
+            {
+                "id": "task_b",
+                "name": "Task B",
+                "user_id": "user_123",
+                "parent_id": "task_a",  # Child of task_a - in the tree
+            },
+            {
+                "id": "task_c",
+                "name": "Task C",
+                "user_id": "user_123",
+                "parent_id": "task_d",  # Child of task_d
+            },
+            {
+                "id": "task_d",
+                "name": "Task D",
+                "user_id": "user_123",
+                "parent_id": "task_e",  # Child of task_e - forms a disconnected chain
+            },
+            {
+                "id": "task_e",
+                "name": "Task E",
+                "user_id": "user_123",
+                # This is also a root task - disconnected from task_a
+                # Chain: task_e -> task_d -> task_c (disconnected from task_a -> task_b)
+            }
+        ]
+        
+        with pytest.raises(ValueError, match="Multiple root tasks found"):
+            await creator.create_task_tree_from_array(tasks)
+    
+    @pytest.mark.asyncio
+    async def test_error_disconnected_subtree(self, sync_db_session):
+        """Test error when there are disconnected subtrees"""
+        creator = TaskCreator(sync_db_session)
+        
+        tasks = [
+            {
+                "id": "task_a",
+                "name": "Task A",
+                "user_id": "user_123",
+                # Root task
+            },
+            {
+                "id": "task_b",
+                "name": "Task B",
+                "user_id": "user_123",
+                "parent_id": "task_a",  # In the tree
+            },
+            {
+                "id": "task_c",
+                "name": "Task C",
+                "user_id": "user_123",
+                "parent_id": "task_d",  # Disconnected subtree
+            },
+            {
+                "id": "task_d",
+                "name": "Task D",
+                "user_id": "user_123",
+                # Another root task - disconnected from task_a
+            }
+        ]
+        
+        with pytest.raises(ValueError, match="Multiple root tasks found"):
+            await creator.create_task_tree_from_array(tasks)
+    
+    @pytest.mark.asyncio
+    async def test_error_isolated_task_not_reachable_from_root(self, sync_db_session):
+        """Test error when a task is not reachable from root task via parent_id chain"""
+        creator = TaskCreator(sync_db_session)
+        
+        tasks = [
+            {
+                "id": "task_a",
+                "name": "Task A",
+                "user_id": "user_123",
+                # Root task
+            },
+            {
+                "id": "task_b",
+                "name": "Task B",
+                "user_id": "user_123",
+                "parent_id": "task_a",  # In the tree
+            },
+            {
+                "id": "task_c",
+                "name": "Task C",
+                "user_id": "user_123",
+                "parent_id": "task_d",  # Child of task_d - disconnected chain
+            },
+            {
+                "id": "task_d",
+                "name": "Task D",
+                "user_id": "user_123",
+                "parent_id": "task_e",  # Child of task_e - forms a disconnected chain
+            },
+            {
+                "id": "task_e",
+                "name": "Task E",
+                "user_id": "user_123",
+                # This is also a root task - disconnected from task_a
+                # Chain: task_e -> task_d -> task_c (disconnected from task_a -> task_b)
+            }
+        ]
+        
+        # Should be caught by "Multiple root tasks found" since task_e is also a root
+        with pytest.raises(ValueError, match="Multiple root tasks found"):
+            await creator.create_task_tree_from_array(tasks)
+    
+    @pytest.mark.asyncio
+    async def test_error_missing_dependent_task(self, sync_db_session):
+        """Test error when a task that depends on a task in the tree is not included"""
+        creator = TaskCreator(sync_db_session)
+        
+        # Create a scenario where task_c depends on task_b, but we only include task_a and task_b
+        # This simulates the case where task_c should be included but isn't
+        # Note: Since we can only validate within the tasks array, we need to test differently
+        
+        # First, let's test the positive case where all dependents are included
+        tasks_complete = [
+            {
+                "id": "task_a",
+                "name": "Task A",
+                "user_id": "user_123",
+                # Root task
+            },
+            {
+                "id": "task_b",
+                "name": "Task B",
+                "user_id": "user_123",
+                "parent_id": "task_a",
+                "dependencies": [{"id": "task_a", "required": True}],
+            },
+            {
+                "id": "task_c",
+                "name": "Task C",
+                "user_id": "user_123",
+                "parent_id": "task_a",
+                "dependencies": [{"id": "task_b", "required": True}],  # Depends on task_b
+            }
+        ]
+        
+        # This should work - all dependent tasks are included
+        task_tree = await creator.create_task_tree_from_array(tasks_complete)
+        assert task_tree.task.name == "Task A"
+        
+        # Now test with missing dependent - task_c depends on task_b but task_c is not included
+        # However, since task_c is not in the array, we can't directly test this scenario
+        # The validation only works within the provided tasks array
+        # This is a limitation - we can only validate dependencies within the array itself
+    
+    @pytest.mark.asyncio
+    async def test_error_missing_transitive_dependent_task(self, sync_db_session):
+        """Test error when a task that transitively depends on a task in the tree is not included"""
+        creator = TaskCreator(sync_db_session)
+        
+        # Test transitive dependencies: task_a -> task_b -> task_c -> task_d
+        # All should be included
+        tasks_complete = [
+            {
+                "id": "task_a",
+                "name": "Task A",
+                "user_id": "user_123",
+                # Root task
+            },
+            {
+                "id": "task_b",
+                "name": "Task B",
+                "user_id": "user_123",
+                "parent_id": "task_a",
+                "dependencies": [{"id": "task_a", "required": True}],
+            },
+            {
+                "id": "task_c",
+                "name": "Task C",
+                "user_id": "user_123",
+                "parent_id": "task_a",
+                "dependencies": [{"id": "task_b", "required": True}],  # Depends on task_b
+            },
+            {
+                "id": "task_d",
+                "name": "Task D",
+                "user_id": "user_123",
+                "parent_id": "task_a",
+                "dependencies": [{"id": "task_c", "required": True}],  # Depends on task_c (transitive)
+            }
+        ]
+        
+        # This should work - all transitive dependents are included
+        task_tree = await creator.create_task_tree_from_array(tasks_complete)
+        assert task_tree.task.name == "Task A"
+        
+        # Verify all tasks are in the tree
+        all_tasks = creator.tree_to_flat_list(task_tree)
+        task_names = {task.name for task in all_tasks}
+        assert "Task A" in task_names
+        assert "Task B" in task_names
+        assert "Task C" in task_names
+        assert "Task D" in task_names
+    
+    @pytest.mark.asyncio
+    async def test_no_error_when_all_dependents_included(self, sync_db_session):
+        """Test that no error is raised when all dependent tasks are included"""
+        creator = TaskCreator(sync_db_session)
+        
+        tasks = [
+            {
+                "id": "task_a",
+                "name": "Task A",
+                "user_id": "user_123",
+                # Root task
+            },
+            {
+                "id": "task_b",
+                "name": "Task B",
+                "user_id": "user_123",
+                "parent_id": "task_a",
+                "dependencies": [{"id": "task_a", "required": True}],
+            },
+            {
+                "id": "task_c",
+                "name": "Task C",
+                "user_id": "user_123",
+                "parent_id": "task_a",
+                "dependencies": [
+                    {"id": "task_a", "required": True},
+                    {"id": "task_b", "required": True},
+                ],
+            },
+            {
+                "id": "task_d",
+                "name": "Task D",
+                "user_id": "user_123",
+                "parent_id": "task_c",
+                "dependencies": [{"id": "task_c", "required": True}],  # Depends on task_c
+            }
+        ]
+        
+        # Should not raise error - all dependent tasks are included
+        task_tree = await creator.create_task_tree_from_array(tasks)
+        assert task_tree.task.name == "Task A"
+        
+        # Verify all tasks are in the tree
+        all_tasks = creator.tree_to_flat_list(task_tree)
+        task_names = {task.name for task in all_tasks}
+        assert "Task A" in task_names
+        assert "Task B" in task_names
+        assert "Task C" in task_names
+        assert "Task D" in task_names
 

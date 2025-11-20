@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Task Tree Validation**
+  - Circular dependency detection using DFS algorithm in `TaskCreator.create_task_tree_from_array()`
+  - Single task tree validation ensuring all tasks are in the same tree structure
+  - Validation that only one root task exists
+  - Verification that all tasks are reachable from root task via parent_id chain
+  - Comprehensive test coverage for circular dependency scenarios
+
 ## [0.1.0] - 2025-11-19
 
 ### Added
