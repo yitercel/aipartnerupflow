@@ -213,6 +213,9 @@ apflow serve --port 8000
 
 # Start daemon mode
 apflow daemon start
+
+# Stop daemon mode
+apflow daemon stop
 ```
 
 ### A2A Protocol Server
