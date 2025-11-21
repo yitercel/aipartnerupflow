@@ -202,11 +202,14 @@ result = await batch.execute(inputs={...})
 ### CLI Usage
 
 ```bash
-# Run a batch
-aipartnerupflow run my_batch --inputs '{"key": "value"}'
+# Run tasks (standard mode - recommended)
+aipartnerupflow run flow --tasks '[{"id": "task1", "name": "Task 1", "schemas": {"method": "executor_id"}, "inputs": {"key": "value"}}]'
 
 # Or use the shorthand
-apflow run my_batch --inputs '{"key": "value"}'
+apflow run flow --tasks '[{"id": "task1", "name": "Task 1", "schemas": {"method": "executor_id"}, "inputs": {"key": "value"}}]'
+
+# Or legacy mode (executor ID + inputs)
+apflow run flow executor_id --inputs '{"key": "value"}'
 
 # Start API server
 apflow serve --port 8000

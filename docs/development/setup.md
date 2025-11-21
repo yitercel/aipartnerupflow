@@ -122,6 +122,7 @@ pytest -m integration tests/
 aipartnerupflow serve start --port 8000 --reload
 # Or use shorthand:
 apflow serve start --port 8000 --reload
+# Note: 'serve --port 8000' (without 'start') also works
 
 # Method 2: Using Python module directly (recommended)
 python -m aipartnerupflow.api.main
@@ -136,11 +137,11 @@ python src/aipartnerupflow/cli/commands/serve.py start --port 8000 --reload
 #### Run CLI Commands
 
 ```bash
-# List available flows
-aipartnerupflow list-flows
+# Run a flow (standard mode with tasks array)
+aipartnerupflow run flow --tasks '[{"id": "task1", "name": "Task 1", "schemas": {"method": "executor_id"}, "inputs": {"key": "value"}}]'
 
-# Run a flow
-aipartnerupflow run example_flow --inputs '{"key": "value"}'
+# Or legacy mode (executor ID + inputs)
+aipartnerupflow run flow executor_id --inputs '{"key": "value"}'
 
 # Start daemon mode
 aipartnerupflow daemon start

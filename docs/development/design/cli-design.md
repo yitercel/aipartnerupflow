@@ -102,7 +102,7 @@ aipartnerupflow tasks count --user-id user-123
 aipartnerupflow interactive
 
 # In interactive mode:
-> run flow example_flow --inputs '{"data": "test"}'
+> run flow executor_id --inputs '{"data": "test"}'
 Task started: task-123
 
 > tasks status task-123

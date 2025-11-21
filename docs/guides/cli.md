@@ -43,7 +43,10 @@ pip install -e ".[all]"
 
 ```bash
 # Execute a task (no API server needed)
-aipartnerupflow run flow example_flow --inputs '{"data": "test"}'
+# Standard mode (recommended):
+aipartnerupflow run flow --tasks '[{"id": "task1", "name": "Task 1", "schemas": {"method": "executor_id"}, "inputs": {"data": "test"}}]'
+# Or legacy mode:
+aipartnerupflow run flow executor_id --inputs '{"data": "test"}'
 
 # Query task status (no API server needed)
 aipartnerupflow tasks status task-123
@@ -118,7 +121,7 @@ curl http://localhost:8000/api/tasks/task-123/status
 aipartnerupflow serve start --port 8000
 
 # Terminal 2: Use CLI to execute tasks
-aipartnerupflow run flow example_flow --inputs '{"data": "test"}'
+aipartnerupflow run flow --tasks '[{"id": "task1", "name": "Task 1", "schemas": {"method": "executor_id"}, "inputs": {"data": "test"}}]'
 
 # Terminal 2: Query via CLI (faster, direct DB access)
 aipartnerupflow tasks status <task_id>
@@ -386,7 +389,7 @@ CLI uses DuckDB by default - no configuration needed:
 
 ```bash
 # Just use CLI - database is created automatically
-aipartnerupflow run flow example_flow --inputs '{"data": "test"}'
+aipartnerupflow run flow --tasks '[{"id": "task1", "name": "Task 1", "schemas": {"method": "executor_id"}, "inputs": {"data": "test"}}]'
 ```
 
 Database file location: `~/.aipartnerupflow/data.duckdb` (or configured path)
@@ -400,7 +403,7 @@ If you want to use PostgreSQL (for production or shared access):
 export DATABASE_URL="postgresql+asyncpg://user:password@localhost/aipartnerupflow"
 
 # Use CLI as normal - it will connect to PostgreSQL
-aipartnerupflow run flow example_flow --inputs '{"data": "test"}'
+aipartnerupflow run flow --tasks '[{"id": "task1", "name": "Task 1", "schemas": {"method": "executor_id"}, "inputs": {"data": "test"}}]'
 ```
 
 **Note**: Both CLI and API will use the same database connection string, so they share data automatically.
@@ -550,7 +553,7 @@ aipartnerupflow tasks cancel <task_id>
 
 ```bash
 # Use CLI for quick testing
-aipartnerupflow run flow example_flow --inputs '{"data": "test"}'
+aipartnerupflow run flow --tasks '[{"id": "task1", "name": "Task 1", "schemas": {"method": "executor_id"}, "inputs": {"data": "test"}}]'
 
 # Use API server for integration testing
 aipartnerupflow serve start --reload
