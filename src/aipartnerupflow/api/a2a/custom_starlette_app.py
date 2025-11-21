@@ -1,11 +1,13 @@
 """
 Custom Starlette Application that supports system-level methods and optional JWT authentication
 """
+import os
 import uuid
 from starlette.routing import Route
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.cors import CORSMiddleware
 from a2a.server.apps.jsonrpc.starlette_app import A2AStarletteApplication
 from datetime import datetime, timezone
 from typing import Optional, Callable, Type, Dict, Any, List
@@ -186,6 +188,31 @@ class CustomA2AStarletteApplication(A2AStarletteApplication):
     def build(self):
         """Build the Starlette app with optional JWT authentication middleware and system routes"""
         app = super().build()
+        
+        # Add CORS middleware (should be added before other middleware)
+        # Get allowed origins from environment variable or use defaults
+        allowed_origins_str = os.getenv(
+            "AIPARTNERUPFLOW_CORS_ORIGINS",
+            "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001"
+        )
+        allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()]
+        
+        # Allow all origins in development if explicitly set
+        allow_all_origins = os.getenv("AIPARTNERUPFLOW_CORS_ALLOW_ALL", "false").lower() in ("true", "1", "yes")
+        
+        if allow_all_origins:
+            allowed_origins = ["*"]
+            logger.info("CORS: Allowing all origins (development mode)")
+        else:
+            logger.info(f"CORS: Allowing origins: {allowed_origins}")
+        
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
         
         if self.verify_token_func:
             # Add JWT authentication middleware

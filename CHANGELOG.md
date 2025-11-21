@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **CLI Command Improvements**
+  - `serve` command now accepts options directly (e.g., `apflow serve --port 8000`) without requiring `start` subcommand
+  - `serve start` subcommand still works for backward compatibility
+  - Improved command structure and user experience
+
+- **CORS Support**
+  - Added CORS middleware to API server for cross-origin requests
+  - Default configuration allows `localhost:3000`, `localhost:3001` and common development ports
+  - Configurable via `AIPARTNERUPFLOW_CORS_ORIGINS` environment variable (comma-separated list)
+  - Development mode: `AIPARTNERUPFLOW_CORS_ALLOW_ALL=true` to allow all origins
+  - Supports credentials, all HTTP methods, and all headers
+
+### Fixed
+- **Documentation Corrections**
+  - Fixed incorrect command examples in README.md and docs:
+    - Corrected `run my_batch` to proper `run flow --tasks` or `run flow executor_id` format
+    - Corrected `run flow example_flow` to proper executor ID format
+    - Removed non-existent `list-flows` command from documentation
+  - Ensured all command examples in documentation are accurate and testable
+
 ## [0.2.0] - 2025-11-21
 
 ### Added
