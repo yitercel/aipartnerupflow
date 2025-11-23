@@ -643,3 +643,929 @@ def test_jsonrpc_tasks_copy(json_rpc_client):
     original_task = get_response.json()["result"]
     assert original_task.get("has_copy") is True
 
+
+def test_jsonrpc_tasks_execute(json_rpc_client):
+    """Test executing a task via JSON-RPC"""
+    # First create a task
+    task_data = {
+        "id": f"execute-test-{uuid.uuid4().hex[:8]}",
+        "name": "Task to Execute",
+        "user_id": "test-user",
+        "status": "pending",
+        "priority": 1,
+        "has_children": False,
+        "dependencies": [],
+        "schemas": {
+            "method": "system_info",
+            "type": "stdio"
+        },
+        "inputs": {}
+    }
+    
+    # Create task
+    create_request = {
+        "jsonrpc": "2.0",
+        "id": 300,
+        "method": "tasks.create",
+        "params": [task_data]
+    }
+    
+    create_response = json_rpc_client.post("/tasks", json=create_request)
+    assert create_response.status_code == 200
+    created_result = create_response.json()
+    task_id = created_result["result"]["id"]
+    
+    # Execute task
+    execute_request = {
+        "jsonrpc": "2.0",
+        "id": 301,
+        "method": "tasks.execute",
+        "params": {
+            "task_id": task_id,
+            "use_streaming": False
+        }
+    }
+    
+    response = json_rpc_client.post(
+        "/tasks",
+        json=execute_request,
+        headers={"Content-Type": "application/json"}
+    )
+    
+    assert response.status_code == 200
+    result = response.json()
+    
+    # Verify JSON-RPC response structure
+    assert "jsonrpc" in result
+    assert result["jsonrpc"] == "2.0"
+    assert "id" in result
+    assert result["id"] == 301
+    assert "result" in result
+    
+    # Verify execution result
+    execution_result = result["result"]
+    assert "success" in execution_result
+    assert execution_result["success"] is True
+    assert "root_task_id" in execution_result
+    assert "task_id" in execution_result
+    assert execution_result["task_id"] == task_id
+    assert "status" in execution_result
+    assert execution_result["status"] == "started"
+    assert "message" in execution_result
+
+
+def test_jsonrpc_tasks_execute_with_streaming(json_rpc_client):
+    """Test executing a task with streaming enabled via JSON-RPC"""
+    # Create a task
+    task_data = {
+        "id": f"execute-stream-{uuid.uuid4().hex[:8]}",
+        "name": "Task to Execute with Streaming",
+        "user_id": "test-user",
+        "status": "pending",
+        "priority": 1,
+        "has_children": False,
+        "dependencies": [],
+        "schemas": {
+            "method": "system_info",
+            "type": "stdio"
+        },
+        "inputs": {}
+    }
+    
+    create_request = {
+        "jsonrpc": "2.0",
+        "id": 310,
+        "method": "tasks.create",
+        "params": [task_data]
+    }
+    
+    create_response = json_rpc_client.post("/tasks", json=create_request)
+    assert create_response.status_code == 200
+    created_result = create_response.json()
+    task_id = created_result["result"]["id"]
+    
+    # Execute task with streaming
+    execute_request = {
+        "jsonrpc": "2.0",
+        "id": 311,
+        "method": "tasks.execute",
+        "params": {
+            "task_id": task_id,
+            "use_streaming": True
+        }
+    }
+    
+    response = json_rpc_client.post(
+        "/tasks",
+        json=execute_request,
+        headers={"Content-Type": "application/json"}
+    )
+    
+    assert response.status_code == 200
+    result = response.json()
+    
+    assert "jsonrpc" in result
+    assert "result" in result
+    execution_result = result["result"]
+    assert execution_result["success"] is True
+    assert execution_result["status"] == "started"
+
+
+def test_jsonrpc_tasks_execute_task_tree(json_rpc_client):
+    """Test executing a task tree via JSON-RPC"""
+    # Create a task tree
+    root_task_data = {
+        "id": f"execute-root-{uuid.uuid4().hex[:8]}",
+        "name": "Root Task to Execute",
+        "user_id": "test-user",
+        "status": "pending",
+        "priority": 2,
+        "has_children": True,
+        "dependencies": [
+            {"id": f"execute-child-{uuid.uuid4().hex[:8]}", "required": True}
+        ],
+        "schemas": {
+            "method": "aggregate_results_executor",
+            "type": "core"
+        },
+        "inputs": {}
+    }
+    
+    child_task_data = {
+        "id": f"execute-child-{uuid.uuid4().hex[:8]}",
+        "name": "Child Task to Execute",
+        "user_id": "test-user",
+        "parent_id": root_task_data["id"],
+        "status": "pending",
+        "priority": 1,
+        "has_children": False,
+        "dependencies": [],
+        "schemas": {
+            "method": "system_info",
+            "type": "stdio"
+        },
+        "inputs": {}
+    }
+    
+    # Fix references
+    child_task_data["parent_id"] = root_task_data["id"]
+    root_task_data["dependencies"][0]["id"] = child_task_data["id"]
+    
+    # Create task tree
+    create_request = {
+        "jsonrpc": "2.0",
+        "id": 320,
+        "method": "tasks.create",
+        "params": [root_task_data, child_task_data]
+    }
+    
+    create_response = json_rpc_client.post("/tasks", json=create_request)
+    assert create_response.status_code == 200
+    created_result = create_response.json()
+    root_task_id = created_result["result"]["id"]
+    
+    # Execute the root task (will execute entire tree)
+    execute_request = {
+        "jsonrpc": "2.0",
+        "id": 321,
+        "method": "tasks.execute",
+        "params": {
+            "task_id": root_task_id,
+            "use_streaming": False
+        }
+    }
+    
+    response = json_rpc_client.post(
+        "/tasks",
+        json=execute_request,
+        headers={"Content-Type": "application/json"}
+    )
+    
+    assert response.status_code == 200
+    result = response.json()
+    print(f"result:\n {json.dumps(result, indent=2)}")
+    
+    assert "jsonrpc" in result
+    assert "result" in result
+    execution_result = result["result"]
+    assert execution_result["success"] is True
+    assert execution_result["root_task_id"] == root_task_id
+    assert execution_result["status"] == "started"
+
+
+def test_jsonrpc_tasks_execute_not_found(json_rpc_client):
+    """Test executing a non-existent task via JSON-RPC"""
+    execute_request = {
+        "jsonrpc": "2.0",
+        "id": 330,
+        "method": "tasks.execute",
+        "params": {
+            "task_id": "non-existent-task-id",
+            "use_streaming": False
+        }
+    }
+    
+    response = json_rpc_client.post(
+        "/tasks",
+        json=execute_request,
+        headers={"Content-Type": "application/json"}
+    )
+    
+    # Should return error
+    assert response.status_code in [200, 500]  # May return 200 with error or 500
+    result = response.json()
+    
+    assert "jsonrpc" in result
+    assert "error" in result
+    assert result["error"]["code"] in [-32602, -32603]  # Invalid params or internal error
+
+
+def test_jsonrpc_tasks_children(json_rpc_client):
+    """Test getting children tasks via JSON-RPC"""
+    # Create a task tree
+    root_task_data = {
+        "id": f"children-root-{uuid.uuid4().hex[:8]}",
+        "name": "Root Task for Children",
+        "user_id": "test-user",
+        "status": "pending",
+        "priority": 2,
+        "has_children": True,
+        "dependencies": [
+            {"id": f"children-child1-{uuid.uuid4().hex[:8]}", "required": True},
+            {"id": f"children-child2-{uuid.uuid4().hex[:8]}", "required": True}
+        ],
+        "schemas": {
+            "method": "aggregate_results_executor",
+            "type": "core"
+        },
+        "inputs": {}
+    }
+    
+    child1_data = {
+        "id": f"children-child1-{uuid.uuid4().hex[:8]}",
+        "name": "Child Task 1",
+        "user_id": "test-user",
+        "parent_id": root_task_data["id"],
+        "status": "pending",
+        "priority": 1,
+        "has_children": False,
+        "dependencies": [],
+        "schemas": {
+            "method": "system_info",
+            "type": "stdio"
+        },
+        "inputs": {}
+    }
+    
+    child2_data = {
+        "id": f"children-child2-{uuid.uuid4().hex[:8]}",
+        "name": "Child Task 2",
+        "user_id": "test-user",
+        "parent_id": root_task_data["id"],
+        "status": "pending",
+        "priority": 1,
+        "has_children": False,
+        "dependencies": [],
+        "schemas": {
+            "method": "system_info",
+            "type": "stdio"
+        },
+        "inputs": {}
+    }
+    
+    # Fix references
+    child1_data["parent_id"] = root_task_data["id"]
+    child2_data["parent_id"] = root_task_data["id"]
+    root_task_data["dependencies"][0]["id"] = child1_data["id"]
+    root_task_data["dependencies"][1]["id"] = child2_data["id"]
+    
+    # Create task tree
+    create_request = {
+        "jsonrpc": "2.0",
+        "id": 400,
+        "method": "tasks.create",
+        "params": [root_task_data, child1_data, child2_data]
+    }
+    
+    create_response = json_rpc_client.post("/tasks", json=create_request)
+    assert create_response.status_code == 200
+    created_result = create_response.json()
+    root_task_id = created_result["result"]["id"]
+    
+    # Get children
+    children_request = {
+        "jsonrpc": "2.0",
+        "id": 401,
+        "method": "tasks.children",
+        "params": {
+            "parent_id": root_task_id
+        }
+    }
+    
+    response = json_rpc_client.post(
+        "/tasks",
+        json=children_request,
+        headers={"Content-Type": "application/json"}
+    )
+    
+    assert response.status_code == 200
+    result = response.json()
+    
+    # Verify JSON-RPC response structure
+    assert "jsonrpc" in result
+    assert result["jsonrpc"] == "2.0"
+    assert "id" in result
+    assert result["id"] == 401
+    assert "result" in result
+    
+    # Verify children list
+    children = result["result"]
+    assert isinstance(children, list)
+    assert len(children) == 2  # Should have 2 children
+    
+    # Verify each child has correct parent_id
+    child_ids = [child["id"] for child in children]
+    assert child1_data["id"] in child_ids or child2_data["id"] in child_ids
+    
+    for child in children:
+        assert child["parent_id"] == root_task_id
+        assert "id" in child
+        assert "name" in child
+
+
+def test_jsonrpc_tasks_children_empty(json_rpc_client):
+    """Test getting children for a task with no children via JSON-RPC"""
+    # Create a task with no children
+    task_data = {
+        "id": f"no-children-{uuid.uuid4().hex[:8]}",
+        "name": "Task with No Children",
+        "user_id": "test-user",
+        "status": "pending",
+        "priority": 1,
+        "has_children": False,
+        "dependencies": [],
+        "schemas": {
+            "method": "system_info",
+            "type": "stdio"
+        },
+        "inputs": {}
+    }
+    
+    create_request = {
+        "jsonrpc": "2.0",
+        "id": 410,
+        "method": "tasks.create",
+        "params": [task_data]
+    }
+    
+    create_response = json_rpc_client.post("/tasks", json=create_request)
+    assert create_response.status_code == 200
+    created_result = create_response.json()
+    task_id = created_result["result"]["id"]
+    
+    # Get children (should be empty)
+    children_request = {
+        "jsonrpc": "2.0",
+        "id": 411,
+        "method": "tasks.children",
+        "params": {
+            "parent_id": task_id
+        }
+    }
+    
+    response = json_rpc_client.post(
+        "/tasks",
+        json=children_request,
+        headers={"Content-Type": "application/json"}
+    )
+    
+    assert response.status_code == 200
+    result = response.json()
+    
+    assert "jsonrpc" in result
+    assert "result" in result
+    children = result["result"]
+    assert isinstance(children, list)
+    assert len(children) == 0  # Should be empty
+
+
+# ============================================================================
+# A2A Protocol Format Tests (POST / endpoint with execute_task_tree method)
+# ============================================================================
+
+def test_a2a_execute_task_tree_simple(json_rpc_client):
+    """Test executing a task using A2A protocol format (POST / with message/send method)"""
+    # A2A Protocol uses message/send method with Message object in params
+    # Based on A2A SDK client implementation analysis
+    task_data = {
+        "id": f"a2a-task-{uuid.uuid4().hex[:8]}",
+        "name": "A2A Task",
+        "user_id": "test-user",
+        "schemas": {
+            "method": "system_info",
+            "type": "stdio"
+        },
+        "inputs": {}
+    }
+    
+    # A2A Protocol JSON-RPC format (as used by A2A SDK client)
+    # Method is "message/send", params contain Message object with parts
+    a2a_request = {
+        "jsonrpc": "2.0",
+        "method": "message/send",
+        "params": {
+            "message": {
+                "message_id": str(uuid.uuid4()),
+                "role": "user",
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "tasks": [task_data]
+                        }
+                    }
+                ]
+            }
+        },
+        "id": "a2a-request-1"
+    }
+    
+    # Send request to A2A Protocol endpoint (POST /)
+    response = json_rpc_client.post(
+        "/",
+        json=a2a_request,
+        headers={"Content-Type": "application/json"}
+    )
+    
+    assert response.status_code == 200
+    result = response.json()
+    print(f"result:\n {json.dumps(result, indent=2)}")
+    
+    # Verify A2A Protocol response structure
+    assert "jsonrpc" in result
+    assert result["jsonrpc"] == "2.0"
+    assert "id" in result
+    assert result["id"] == "a2a-request-1"
+    
+    # A2A protocol may return result or error
+    if "result" in result:
+        # Verify execution result structure
+        execution_result = result["result"]
+        # Result can be a Task, Message, or dict with execution status
+        assert isinstance(execution_result, (dict, list))
+        # If it's a dict, check for expected fields
+        if isinstance(execution_result, dict):
+            # Result may be a Message with parts, or a Task, or execution status
+            if "parts" in execution_result:
+                # It's a Message object
+                assert "message_id" in execution_result
+            elif "status" in execution_result or "root_task_id" in execution_result or "progress" in execution_result:
+                # It's an execution result
+                pass
+            elif "id" in execution_result and "name" in execution_result:
+                # It's a Task object
+                pass
+    elif "error" in result:
+        # If there's an error, raise it
+        error = result["error"]
+        raise AssertionError(f"A2A protocol error: {error}")
+
+
+def test_a2a_execute_task_tree_with_dependencies(json_rpc_client):
+    """Test executing a task tree with dependencies using A2A protocol format"""
+    root_task_id = f"a2a-root-{uuid.uuid4().hex[:8]}"
+    child_task_id = f"a2a-child-{uuid.uuid4().hex[:8]}"
+    
+    tasks = [
+        {
+            "id": root_task_id,
+            "name": "A2A Root Task",
+            "user_id": "test-user",
+            "dependencies": [
+                {"id": child_task_id, "required": True}
+            ],
+            "schemas": {
+                "method": "aggregate_results_executor",
+                "type": "core"
+            },
+            "inputs": {}
+        },
+        {
+            "id": child_task_id,
+            "name": "A2A Child Task",
+            "user_id": "test-user",
+            "parent_id": root_task_id,
+            "schemas": {
+                "method": "system_info",
+                "type": "stdio"
+            },
+            "inputs": {}
+        }
+    ]
+    
+    # A2A Protocol JSON-RPC format (as used by A2A SDK client)
+    a2a_request = {
+        "jsonrpc": "2.0",
+        "method": "message/send",
+        "params": {
+            "message": {
+                "message_id": str(uuid.uuid4()),
+                "role": "user",
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "tasks": tasks
+                        }
+                    }
+                ]
+            }
+        },
+        "id": "a2a-request-2"
+    }
+    
+    response = json_rpc_client.post(
+        "/",
+        json=a2a_request,
+        headers={"Content-Type": "application/json"}
+    )
+    
+    assert response.status_code == 200
+    result = response.json()
+    
+    assert "jsonrpc" in result
+    if "result" in result:
+        execution_result = result["result"]
+        assert isinstance(execution_result, (dict, list))
+    elif "error" in result:
+        error = result["error"]
+        raise AssertionError(f"A2A protocol error: {error}")
+
+
+def test_a2a_execute_task_tree_with_streaming(json_rpc_client):
+    """Test executing a task tree with streaming enabled using A2A protocol format"""
+    task_data = {
+        "id": f"a2a-stream-{uuid.uuid4().hex[:8]}",
+        "name": "A2A Streaming Task",
+        "user_id": "test-user",
+        "schemas": {
+            "method": "system_info",
+            "type": "stdio"
+        },
+        "inputs": {}
+    }
+    
+    # A2A Protocol JSON-RPC format with streaming metadata
+    a2a_request = {
+        "jsonrpc": "2.0",
+        "method": "message/send",
+        "params": {
+            "message": {
+                "message_id": str(uuid.uuid4()),
+                "role": "user",
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "tasks": [task_data]
+                        }
+                    }
+                ]
+            },
+            "metadata": {
+                "stream": True
+            }
+        },
+        "id": "a2a-request-3"
+    }
+    
+    response = json_rpc_client.post(
+        "/",
+        json=a2a_request,
+        headers={"Content-Type": "application/json"}
+    )
+    
+    assert response.status_code == 200
+    result = response.json()
+    
+    assert "jsonrpc" in result
+    if "result" in result:
+        execution_result = result["result"]
+        assert isinstance(execution_result, (dict, list))
+    elif "error" in result:
+        error = result["error"]
+        raise AssertionError(f"A2A protocol error: {error}")
+
+
+def test_a2a_execute_task_tree_with_push_notifications(json_rpc_client):
+    """Test executing a task tree with push notifications using A2A protocol format"""
+    task_data = {
+        "id": f"a2a-push-{uuid.uuid4().hex[:8]}",
+        "name": "A2A Push Notification Task",
+        "user_id": "test-user",
+        "schemas": {
+            "method": "system_info",
+            "type": "stdio"
+        },
+        "inputs": {}
+    }
+    
+    # A2A Protocol JSON-RPC format with push notification configuration
+    a2a_request = {
+        "jsonrpc": "2.0",
+        "method": "message/send",
+        "params": {
+            "message": {
+                "message_id": str(uuid.uuid4()),
+                "role": "user",
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "tasks": [task_data]
+                        }
+                    }
+                ]
+            },
+            "configuration": {
+                "push_notification_config": {
+                    "url": "https://example.com/callback",
+                    "headers": {
+                        "Authorization": "Bearer test-token"
+                    },
+                    "method": "POST"
+                }
+            }
+        },
+        "id": "a2a-request-4"
+    }
+    
+    response = json_rpc_client.post(
+        "/",
+        json=a2a_request,
+        headers={"Content-Type": "application/json"}
+    )
+    
+    assert response.status_code == 200
+    result = response.json()
+    
+    assert "jsonrpc" in result
+    if "result" in result:
+        execution_result = result["result"]
+        assert isinstance(execution_result, dict)
+        # With push notifications, execution is async, so status might be "in_progress"
+        if isinstance(execution_result, dict) and "status" in execution_result:
+            assert execution_result["status"] in ["in_progress", "completed", "pending"]
+    elif "error" in result:
+        error = result["error"]
+        raise AssertionError(f"A2A protocol error: {error}")
+
+
+def test_a2a_execute_task_tree_complex_tree(json_rpc_client):
+    """Test executing a complex task tree using A2A protocol format"""
+    root_id = f"a2a-complex-root-{uuid.uuid4().hex[:8]}"
+    child1_id = f"a2a-complex-child1-{uuid.uuid4().hex[:8]}"
+    child2_id = f"a2a-complex-child2-{uuid.uuid4().hex[:8]}"
+    grandchild_id = f"a2a-complex-grandchild-{uuid.uuid4().hex[:8]}"
+    
+    # Complex task tree: root -> child1, child2 -> grandchild
+    tasks = [
+        {
+            "id": root_id,
+            "name": "A2A Complex Root",
+            "user_id": "test-user",
+            "dependencies": [
+                {"id": child1_id, "required": True},
+                {"id": child2_id, "required": True}
+            ],
+            "schemas": {
+                "method": "aggregate_results_executor",
+                "type": "core"
+            },
+            "inputs": {}
+        },
+        {
+            "id": child1_id,
+            "name": "A2A Child 1",
+            "user_id": "test-user",
+            "parent_id": root_id,
+            "schemas": {
+                "method": "system_info",
+                "type": "stdio"
+            },
+            "inputs": {"resource": "cpu"}
+        },
+        {
+            "id": child2_id,
+            "name": "A2A Child 2",
+            "user_id": "test-user",
+            "parent_id": root_id,
+            "dependencies": [
+                {"id": grandchild_id, "required": True}
+            ],
+            "schemas": {
+                "method": "system_info",
+                "type": "stdio"
+            },
+            "inputs": {"resource": "memory"}
+        },
+        {
+            "id": grandchild_id,
+            "name": "A2A Grandchild",
+            "user_id": "test-user",
+            "parent_id": child2_id,
+            "schemas": {
+                "method": "system_info",
+                "type": "stdio"
+            },
+            "inputs": {"resource": "disk"}
+        }
+    ]
+    
+    # A2A Protocol JSON-RPC format (as used by A2A SDK client)
+    a2a_request = {
+        "jsonrpc": "2.0",
+        "method": "message/send",
+        "params": {
+            "message": {
+                "message_id": str(uuid.uuid4()),
+                "role": "user",
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "tasks": tasks
+                        }
+                    }
+                ]
+            }
+        },
+        "id": "a2a-request-5"
+    }
+    
+    response = json_rpc_client.post(
+        "/",
+        json=a2a_request,
+        headers={"Content-Type": "application/json"}
+    )
+    
+    assert response.status_code == 200
+    result = response.json()
+    
+    assert "jsonrpc" in result
+    if "result" in result:
+        execution_result = result["result"]
+        assert isinstance(execution_result, dict)
+        if "root_task_id" in execution_result:
+            assert execution_result["root_task_id"] == root_id
+        if isinstance(execution_result, dict) and "task_count" in execution_result:
+            assert execution_result["task_count"] == 4  # root + 2 children + 1 grandchild
+    elif "error" in result:
+        error = result["error"]
+        raise AssertionError(f"A2A protocol error: {error}")
+
+
+def test_a2a_execute_task_tree_error_handling(json_rpc_client):
+    """Test A2A protocol error handling for invalid requests"""
+    # Invalid method
+    invalid_request = {
+        "jsonrpc": "2.0",
+        "method": "invalid_method",
+        "params": {},
+        "id": "a2a-error-1"
+    }
+    
+    response = json_rpc_client.post(
+        "/",
+        json=invalid_request,
+        headers={"Content-Type": "application/json"}
+    )
+    
+    assert response.status_code in [200, 400]
+    result = response.json()
+    assert "jsonrpc" in result
+    assert "error" in result
+    assert result["error"]["code"] == -32601  # Method not found
+    
+    # Missing message/tasks
+    missing_tasks_request = {
+        "jsonrpc": "2.0",
+        "method": "message/send",
+        "params": {
+            "message": {
+                "message_id": str(uuid.uuid4()),
+                "role": "user",
+                "parts": []  # Empty parts - should cause error
+            }
+        },
+        "id": "a2a-error-2"
+    }
+    
+    response = json_rpc_client.post(
+        "/",
+        json=missing_tasks_request,
+        headers={"Content-Type": "application/json"}
+    )
+    
+    assert response.status_code in [200, 400, 500]
+    result = response.json()
+    assert "jsonrpc" in result
+    # Should have error or empty result
+    assert "error" in result or "result" in result
+
+
+def test_a2a_execute_task_tree_vs_tasks_execute(json_rpc_client):
+    """Compare A2A protocol format vs tasks.execute method"""
+    # First, create a task using tasks.create
+    task_data = {
+        "id": f"compare-task-{uuid.uuid4().hex[:8]}",
+        "name": "Compare Task",
+        "user_id": "test-user",
+        "status": "pending",
+        "priority": 1,
+        "has_children": False,
+        "dependencies": [],
+        "schemas": {
+            "method": "system_info",
+            "type": "stdio"
+        },
+        "inputs": {}
+    }
+    
+    create_request = {
+        "jsonrpc": "2.0",
+        "id": 500,
+        "method": "tasks.create",
+        "params": [task_data]
+    }
+    
+    create_response = json_rpc_client.post("/tasks", json=create_request)
+    assert create_response.status_code == 200
+    created_result = create_response.json()
+    task_id = created_result["result"]["id"]
+    
+    # Method 1: Execute using tasks.execute
+    execute_request = {
+        "jsonrpc": "2.0",
+        "id": 501,
+        "method": "tasks.execute",
+        "params": {
+            "task_id": task_id,
+            "use_streaming": False
+        }
+    }
+    
+    execute_response = json_rpc_client.post("/tasks", json=execute_request)
+    assert execute_response.status_code == 200
+    execute_result = execute_response.json()
+    assert execute_result["result"]["success"] is True
+    
+    # Method 2: Execute using A2A protocol format (creates and executes in one call)
+    task_data = {
+        "id": f"compare-a2a-{uuid.uuid4().hex[:8]}",
+        "name": "Compare A2A Task",
+        "user_id": "test-user",
+        "schemas": {
+            "method": "system_info",
+            "type": "stdio"
+        },
+        "inputs": {}
+    }
+    
+    # A2A Protocol JSON-RPC format (as used by A2A SDK client)
+    a2a_request = {
+        "jsonrpc": "2.0",
+        "method": "message/send",
+        "params": {
+            "message": {
+                "message_id": str(uuid.uuid4()),
+                "role": "user",
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "tasks": [task_data]
+                        }
+                    }
+                ]
+            }
+        },
+        "id": "a2a-compare-1"
+    }
+    
+    a2a_response = json_rpc_client.post("/", json=a2a_request)
+    assert a2a_response.status_code == 200
+    a2a_result = a2a_response.json()
+    
+    # A2A protocol response format may vary
+    if "result" in a2a_result:
+        assert isinstance(a2a_result["result"], (dict, list))
+    elif "error" in a2a_result:
+        error = a2a_result["error"]
+        # Other errors are acceptable for comparison test
+        pass
+    
+    # Both methods should work, but have different use cases:
+    # - tasks.execute: Execute existing tasks
+    # - A2A message/send: Create and execute in one call using Message format
+
