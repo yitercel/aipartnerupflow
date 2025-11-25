@@ -238,6 +238,14 @@ class AIPartnerUpFlowAgentExecutor(AgentExecutor):
             ]
             
             # Create Task object with matching task_id
+            # Add protocol identifier to metadata for easy identification
+            metadata = {
+                "protocol": "a2a",
+                "root_task_id": actual_root_task_id,
+            }
+            if root_task_model.user_id:
+                metadata["user_id"] = root_task_model.user_id
+            
             a2a_task = Task(
                 id=task_id,  # Must match context.task_id
                 context_id=context_id,
@@ -247,12 +255,7 @@ class AIPartnerUpFlowAgentExecutor(AgentExecutor):
                     message=new_agent_text_message(task_status_message)
                 ),
                 artifacts=artifacts,
-                metadata={
-                    "root_task_id": actual_root_task_id,
-                    "user_id": root_task_model.user_id
-                } if root_task_model.user_id else {
-                    "root_task_id": actual_root_task_id
-                }
+                metadata=metadata
             )
             
             # Send result as TaskStatusUpdateEvent
@@ -262,6 +265,7 @@ class AIPartnerUpFlowAgentExecutor(AgentExecutor):
                 status=TaskStatus(
                     state=task_state,
                     message=new_agent_parts_message([DataPart(data={
+                        "protocol": "a2a",
                         "status": final_status,
                         "progress": execution_result["progress"],
                         "root_task_id": actual_root_task_id,
@@ -461,6 +465,7 @@ class AIPartnerUpFlowAgentExecutor(AgentExecutor):
     ):
         """Helper method to send error updates"""
         error_data = {
+            "protocol": "a2a",
             "status": "failed",
             "error": error,
             "timestamp": datetime.now(timezone.utc).isoformat()

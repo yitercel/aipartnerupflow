@@ -158,17 +158,40 @@ JSON-RPC 2.0 format:
   - `stream` (boolean, optional): Enable streaming mode for real-time updates
 
 **Response Format:**  
-JSON-RPC 2.0 response:
+JSON-RPC 2.0 response with A2A Protocol Task object:
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": "request-123",
   "result": {
-    "status": "completed",
-    "root_task_id": "task-abc-123",
-    "progress": 1.0,
-    "task_count": 2
+    "id": "task-execution-id",
+    "context_id": "task-abc-123",
+    "kind": "task",
+    "status": {
+      "state": "completed",
+      "message": {
+        "kind": "message",
+        "parts": [
+          {
+            "kind": "data",
+            "data": {
+              "protocol": "a2a",
+              "status": "completed",
+              "progress": 1.0,
+              "root_task_id": "task-abc-123",
+              "task_count": 2
+            }
+          }
+        ]
+      }
+    },
+    "artifacts": [...],
+    "metadata": {
+      "protocol": "a2a",
+      "root_task_id": "task-abc-123",
+      "user_id": "user123"
+    }
   }
 }
 ```
@@ -176,11 +199,23 @@ JSON-RPC 2.0 response:
 **Response Fields:**
 - `jsonrpc` (string): JSON-RPC version ("2.0")
 - `id` (string/number): Request identifier (matches request)
-- `result` (object): Execution result
-  - `status` (string): Task status ("completed", "in_progress", "failed", "pending")
-  - `root_task_id` (string): ID of the root task
-  - `progress` (float): Overall progress (0.0 to 1.0)
-  - `task_count` (integer): Number of tasks in the tree
+- `result` (object): A2A Protocol Task object
+  - `id` (string): Task execution instance ID
+  - `context_id` (string): Task definition ID (root task ID)
+  - `kind` (string): Always `"task"` for A2A protocol
+  - `status` (object): Task status object
+    - `state` (string): Task state ("completed", "working", "failed", etc.)
+    - `message` (object): Status message with parts
+      - `parts[].data.protocol` (string): Protocol identifier, always `"a2a"` for A2A protocol responses
+      - `parts[].data.status` (string): Task status ("completed", "in_progress", "failed", "pending")
+      - `parts[].data.progress` (float): Overall progress (0.0 to 1.0)
+      - `parts[].data.root_task_id` (string): ID of the root task
+      - `parts[].data.task_count` (integer): Number of tasks in the tree
+  - `artifacts` (array): Execution artifacts
+  - `metadata` (object): Task metadata
+    - `protocol` (string): Protocol identifier, always `"a2a"` for A2A protocol responses
+    - `root_task_id` (string): ID of the root task
+    - `user_id` (string, optional): User ID associated with the task
 
 **Error Response:**
 ```json
@@ -262,6 +297,8 @@ curl -X POST http://localhost:8000/ \
 - When `metadata.stream` is true, progress updates are sent via EventQueue (SSE/WebSocket)
 - Task execution follows dependency order and priority scheduling
 - All tasks in a tree must have the same `user_id` (or be accessible by the authenticated user)
+- All responses include `protocol: "a2a"` in Task metadata and event data to identify this as an A2A Protocol response
+- This differs from JSON-RPC protocol responses (which use `protocol: "jsonrpc"` in the response object)
 
 ### Task Management Endpoints
 
@@ -819,31 +856,49 @@ Executes a task by its ID. This method builds the task tree starting from the sp
 }
 ```
 
-**Example Response:**
+**Example Response (Non-streaming):**
 ```json
 {
   "jsonrpc": "2.0",
   "id": "execute-request-1",
   "result": {
     "success": true,
+    "protocol": "jsonrpc",
     "root_task_id": "task-abc-123",
     "task_id": "task-abc-123",
     "status": "started",
-    "message": "Task task-abc-123 execution started",
-    "execution_result": {
-      "status": "in_progress"
-    }
+    "message": "Task task-abc-123 execution started"
+  }
+}
+```
+
+**Example Response (Streaming mode):**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "execute-request-1",
+  "result": {
+    "success": true,
+    "protocol": "jsonrpc",
+    "root_task_id": "task-abc-123",
+    "task_id": "task-abc-123",
+    "status": "started",
+    "streaming": true,
+    "message": "Task task-abc-123 execution started with streaming. Listen to /events?task_id=task-abc-123 for updates.",
+    "events_url": "/events?task_id=task-abc-123"
   }
 }
 ```
 
 **Response Fields:**
 - `success` (boolean): Whether execution was started successfully
+- `protocol` (string): Protocol identifier, always `"jsonrpc"` for this endpoint. Used to distinguish from A2A protocol responses.
 - `root_task_id` (string): ID of the root task in the tree
 - `task_id` (string): ID of the task that was executed
 - `status` (string): Execution status ("started", "already_running", "failed")
 - `message` (string): Status message
-- `execution_result` (object): Execution result object with status information
+- `streaming` (boolean, optional): Present only when `use_streaming=true`. Indicates that streaming mode is enabled.
+- `events_url` (string, optional): Present only when `use_streaming=true`. URL endpoint to listen for streaming updates.
 
 **Error Cases:**
 - Task not found: Returns error with code -32602
@@ -857,6 +912,8 @@ Executes a task by its ID. This method builds the task tree starting from the sp
 - Use `tasks.running.status` to check execution progress
 - Use `use_streaming=true` to receive real-time progress updates via EventQueue
 - Tasks are executed following dependency order and priority
+- All responses include `protocol: "jsonrpc"` field to identify this as a JSON-RPC protocol response
+- This differs from A2A Protocol responses (which use `protocol: "a2a"` in metadata and event data)
 
 ### `tasks.detail`
 
@@ -1887,6 +1944,94 @@ curl -X POST http://localhost:8000/tasks \
   }'
 ```
 
+## Protocol Identification
+
+The API supports two execution protocols, each with distinct response formats. To help clients identify which protocol a response belongs to, all responses include a `protocol` field.
+
+### JSON-RPC Protocol (`/tasks` endpoint)
+
+When using the `/tasks` endpoint with `tasks.execute`, responses include:
+
+```json
+{
+  "success": true,
+  "protocol": "jsonrpc",  // Protocol identifier
+  "root_task_id": "...",
+  "task_id": "...",
+  "status": "started",
+  ...
+}
+```
+
+**Identification:**
+- `protocol: "jsonrpc"` field in the response
+- `success` field present
+- No `kind` field
+
+### A2A Protocol (`/` endpoint)
+
+When using the A2A Protocol endpoint (`/`), responses include:
+
+```json
+{
+  "id": "...",
+  "kind": "task",
+  "metadata": {
+    "protocol": "a2a",  // Protocol identifier in metadata
+    ...
+  },
+  "status": {
+    "message": {
+      "parts": [{
+        "data": {
+          "protocol": "a2a",  // Protocol identifier in event data
+          ...
+        }
+      }]
+    }
+  }
+}
+```
+
+**Identification:**
+- `protocol: "a2a"` in `metadata` field
+- `protocol: "a2a"` in status message parts data
+- `kind: "task"` field present
+- No `success` field
+
+### How to Distinguish Protocols
+
+**Method 1: Check `protocol` field (Recommended)**
+```python
+# JSON-RPC response
+if response.get("protocol") == "jsonrpc":
+    # Handle JSON-RPC response
+    pass
+
+# A2A Protocol response
+if response.get("metadata", {}).get("protocol") == "a2a":
+    # Handle A2A Protocol response
+    pass
+
+# Or check in event data
+if event_data.get("protocol") == "a2a":
+    # Handle A2A Protocol event
+    pass
+```
+
+**Method 2: Check existing fields (Backward compatible)**
+```python
+# JSON-RPC response
+if "success" in response:
+    # Handle JSON-RPC response
+    pass
+
+# A2A Protocol response
+if "kind" in response and response["kind"] == "task":
+    # Handle A2A Protocol response
+    pass
+```
+
 ## CustomA2AStarletteApplication Custom Routes
 
 The `CustomA2AStarletteApplication` extends the standard A2A Starlette Application with additional custom routes for task management and system operations.
@@ -1899,6 +2044,16 @@ The custom application adds the following routes:
 2. **`POST /system`** - System operations endpoint (see [System Endpoints](#system-endpoints))
 
 These routes are enabled by default when using `CustomA2AStarletteApplication`. To disable them, set `enable_system_routes=False` when creating the application.
+
+### Route Handler Architecture
+
+The route handlers are implemented in the `api/routes/` directory as protocol-agnostic modules that can be reused across different protocol implementations (A2A, REST, GraphQL, etc.):
+
+- **`api/routes/base.py`**: Provides `BaseRouteHandler` class with shared functionality for permission checking, user information extraction, and common utilities
+- **`api/routes/tasks.py`**: Contains `TaskRoutes` class with handlers for task CRUD operations, execution, and monitoring
+- **`api/routes/system.py`**: Contains `SystemRoutes` class with handlers for system operations like health checks, LLM key configuration, and examples management
+
+This architecture allows the same route handlers to be used by different protocol implementations, promoting code reuse and maintainability.
 
 ### Initialization
 

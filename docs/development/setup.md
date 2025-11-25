@@ -416,7 +416,7 @@ xdg-open htmlcov/index.html  # Linux
   - Test cases can be used as learning templates
 
 **Service Modules**:
-- **`api/`**: API layer (A2A server, handlers) [a2a extra]
+- **`api/`**: API layer (A2A server, route handlers) [a2a extra]
 - **`cli/`**: Command-line interface [cli extra]
 **Protocol Standard**: The framework adopts **A2A (Agent-to-Agent) Protocol** as the standard protocol. See `api/` module for A2A Protocol implementation.
 
@@ -426,7 +426,7 @@ xdg-open htmlcov/index.html  # Linux
 2. **New CrewAI Crew**: Add to `ext/crews/` [ext extra]
 3. **New Batch**: Add to `ext/batches/` [ext extra]
 4. **New Storage Backend**: Add dialect to `storage/dialects/`
-5. **New API Endpoint**: Add handler to `api/handlers/`
+5. **New API Endpoint**: Add handler to `api/routes/` (protocol-agnostic route handlers)
 6. **New CLI Command**: Add to `cli/commands/`
 
 ### Code Style

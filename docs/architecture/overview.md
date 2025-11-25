@@ -145,6 +145,11 @@ api/                   # Unified API service layer (supports multiple protocols)
 │   ├── agent_executor.py      # A2A agent executor
 │   ├── custom_starlette_app.py # Custom A2A Starlette application
 │   └── event_queue_bridge.py   # Event queue bridge
+├── routes/            # Protocol-agnostic route handlers
+│   ├── __init__.py    # Route handlers exports
+│   ├── base.py        # BaseRouteHandler - shared functionality
+│   ├── tasks.py       # TaskRoutes - task management handlers
+│   └── system.py      # SystemRoutes - system operation handlers
 └── rest/              # REST API (future implementation)
 ```
 

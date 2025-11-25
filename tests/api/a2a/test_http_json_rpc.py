@@ -698,6 +698,8 @@ def test_jsonrpc_tasks_execute(json_rpc_client):
     execution_result = result["result"]
     assert "success" in execution_result
     assert execution_result["success"] is True
+    assert "protocol" in execution_result
+    assert execution_result["protocol"] == "jsonrpc"  # Verify protocol identifier
     assert "root_task_id" in execution_result
     assert "task_id" in execution_result
     assert execution_result["task_id"] == task_id
@@ -760,7 +762,11 @@ def test_jsonrpc_tasks_execute_with_streaming(json_rpc_client):
     assert "result" in result
     execution_result = result["result"]
     assert execution_result["success"] is True
+    assert "protocol" in execution_result
+    assert execution_result["protocol"] == "jsonrpc"  # Verify protocol identifier
     assert execution_result["status"] == "started"
+    assert "streaming" in execution_result
+    assert execution_result["streaming"] is True
 
 
 def test_jsonrpc_tasks_execute_task_tree(json_rpc_client):
@@ -1109,6 +1115,9 @@ def test_a2a_execute_task_tree_simple(json_rpc_client):
         assert "id" in execution_result
         assert "kind" in execution_result
         assert execution_result["kind"] == "task"
+        # Verify protocol identifier in metadata
+        if "metadata" in execution_result:
+            assert execution_result["metadata"].get("protocol") == "a2a"
         assert "status" in execution_result
         # Check status from Task.status.state
         if isinstance(execution_result["status"], dict):
@@ -1116,6 +1125,14 @@ def test_a2a_execute_task_tree_simple(json_rpc_client):
             if status_state:
                 # A2A TaskState enum values: submitted, working, input-required, completed, canceled, failed, rejected, auth-required, unknown
                 assert status_state in ["submitted", "working", "input-required", "completed", "canceled", "failed", "rejected", "auth-required", "unknown"]
+            # Check if status.message contains protocol identifier
+            status_message = execution_result["status"].get("message")
+            if isinstance(status_message, dict) and "parts" in status_message:
+                for part in status_message["parts"]:
+                    if isinstance(part, dict) and part.get("kind") == "data":
+                        part_data = part.get("data", {})
+                        if isinstance(part_data, dict) and "protocol" in part_data:
+                            assert part_data["protocol"] == "a2a"
     elif "error" in result:
         # If there's an error, raise it
         error = result["error"]

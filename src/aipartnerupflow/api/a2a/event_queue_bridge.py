@@ -98,6 +98,8 @@ class EventQueueBridge:
         # Include actual task_id from update_data in the event data for reference
         actual_task_id = update_data.get("task_id")
         event_data = update_data.copy()
+        # Add protocol identifier for A2A protocol responses
+        event_data["protocol"] = "a2a"
         if actual_task_id and actual_task_id != task_id:
             # Store actual task_id in metadata for reference
             if "metadata" not in event_data:

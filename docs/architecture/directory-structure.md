@@ -132,6 +132,34 @@ Unified external API service layer supporting multiple network protocols.
 
 **Installation**: `pip install aipartnerupflow[a2a]`
 
+```
+api/
+├── __init__.py            # API module exports
+├── main.py                # API service entry point (supports protocol selection)
+├── a2a/                   # A2A Protocol Server implementation
+│   ├── __init__.py        # A2A module exports
+│   ├── server.py          # A2A server creation
+│   ├── agent_executor.py  # A2A agent executor
+│   ├── custom_starlette_app.py  # Custom A2A Starlette application
+│   └── event_queue_bridge.py    # Event queue bridge
+├── routes/                 # Protocol-agnostic route handlers
+│   ├── __init__.py        # Route handlers exports
+│   ├── base.py            # BaseRouteHandler - shared functionality
+│   ├── tasks.py           # TaskRoutes - task management handlers
+│   └── system.py          # SystemRoutes - system operation handlers
+└── rest/                  # REST API (future implementation)
+```
+
+**Route Handlers Architecture**:
+
+The `api/routes/` directory contains protocol-agnostic route handlers that can be used by any protocol implementation (A2A, REST, GraphQL, etc.):
+
+- **`base.py`**: Provides `BaseRouteHandler` class with shared functionality for permission checking, user information extraction, and common utilities
+- **`tasks.py`**: Contains `TaskRoutes` class with handlers for task CRUD operations, execution, and monitoring
+- **`system.py`**: Contains `SystemRoutes` class with handlers for system operations like health checks, LLM key configuration, and examples management
+
+These handlers are designed to be protocol-agnostic, allowing them to be reused across different protocol implementations.
+
 ## CLI Tools (`cli/`)
 
 Command-line interface for task management.

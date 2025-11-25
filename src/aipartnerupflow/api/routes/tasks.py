@@ -1,0 +1,1191 @@
+"""
+Task management route handlers - protocol-agnostic
+
+This module provides task management handlers that can be used by any protocol
+(A2A, REST, GraphQL, etc.) to handle task CRUD operations, execution, and monitoring.
+"""
+
+import uuid
+import asyncio
+import time
+from typing import Optional, Dict, Any, List
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
+from aipartnerupflow.api.routes.base import BaseRouteHandler
+from aipartnerupflow.core.storage import get_default_session
+from aipartnerupflow.core.storage.sqlalchemy.task_repository import TaskRepository
+from aipartnerupflow.core.execution.task_creator import TaskCreator
+from aipartnerupflow.core.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+# Global event storage for task streaming (keyed by root_task_id)
+_task_streaming_events: Dict[str, List[Dict[str, Any]]] = {}
+_task_streaming_events_lock = asyncio.Lock()
+
+
+class TaskStreamingContext:
+    """
+    Streaming context for JSON-RPC tasks.execute endpoint
+    Similar to EventQueueBridge but stores updates in memory for SSE consumption
+    """
+    
+    def __init__(self, root_task_id: str):
+        """
+        Initialize streaming context
+        
+        Args:
+            root_task_id: Root task ID for this execution
+        """
+        self.root_task_id = root_task_id
+        self._update_queue = asyncio.Queue()
+        self._bridge_task = None
+        
+        # Start background task to process updates
+        self._start_bridge_task()
+    
+    def _start_bridge_task(self):
+        """Start background task to store updates"""
+        async def bridge_worker():
+            while True:
+                try:
+                    update_data = await self._update_queue.get()
+                    
+                    if update_data is None:  # Sentinel to stop
+                        break
+                    
+                    # Store update in global event store
+                    async with _task_streaming_events_lock:
+                        if self.root_task_id not in _task_streaming_events:
+                            _task_streaming_events[self.root_task_id] = []
+                        _task_streaming_events[self.root_task_id].append(update_data)
+                    
+                    self._update_queue.task_done()
+                except Exception as e:
+                    logger.error(f"Error in streaming bridge worker: {str(e)}")
+        
+        self._bridge_task = asyncio.create_task(bridge_worker())
+    
+    async def put(self, update_data: Dict[str, Any]):
+        """
+        Put progress update to bridge
+        
+        Args:
+            update_data: Progress update data from TaskManager
+        """
+        await self._update_queue.put(update_data)
+    
+    async def close(self):
+        """Close bridge and stop background task"""
+        await self._update_queue.put(None)  # Sentinel to stop worker
+        if self._bridge_task:
+            await self._bridge_task
+
+
+async def get_task_streaming_events(root_task_id: str) -> List[Dict[str, Any]]:
+    """
+    Get streaming events for a task
+    
+    Args:
+        root_task_id: Root task ID
+        
+    Returns:
+        List of streaming events
+    """
+    async with _task_streaming_events_lock:
+        return _task_streaming_events.get(root_task_id, []).copy()
+
+
+class TaskRoutes(BaseRouteHandler):
+    """
+    Task management route handlers
+    
+    Provides protocol-agnostic handlers for task CRUD operations, execution,
+    and monitoring that can be used by any protocol implementation.
+    """
+    
+    async def handle_task_requests(self, request: Request) -> JSONResponse:
+        """Handle all task management requests through /tasks endpoint"""
+        start_time = time.time()
+        request_id = str(uuid.uuid4())
+        
+        # Note: LLM API key extraction is now handled by LLMAPIKeyMiddleware
+        # for all routes including /tasks and / (A2A protocol)
+        
+        try:
+            # Parse JSON request
+            body = await request.json()
+            method = body.get("method")
+            params = body.get("params", {})
+            
+            # Support direct tasks array for tasks.create method
+            # If method is tasks.create and params is a list, use it directly
+            if method == "tasks.create" and isinstance(params, list):
+                # params is directly the tasks array
+                logger.info(f"🔍 [handle_task_requests] [{request_id}] Method: {method}, Tasks array: {len(params)} tasks")
+                result = await self.handle_task_create(params, request, request_id)
+            else:
+                # Normal case: params is a dict
+                if not isinstance(params, dict):
+                    params = {}  # Fallback to empty dict if params is not dict or list
+                
+                logger.info(f"🔍 [handle_task_requests] [{request_id}] Method: {method}, Params: {params}")
+                
+                # Route to specific handler based on method
+                # Pass request object to handlers for access to user info and permission checking
+                # Task CRUD operations
+                if method == "tasks.create":
+                    result = await self.handle_task_create(params, request, request_id)
+                elif method == "tasks.get":
+                    result = await self.handle_task_get(params, request, request_id)
+                elif method == "tasks.update":
+                    result = await self.handle_task_update(params, request, request_id)
+                elif method == "tasks.delete":
+                    result = await self.handle_task_delete(params, request, request_id)
+                # Task query operations
+                elif method == "tasks.detail":
+                    result = await self.handle_task_detail(params, request, request_id)
+                elif method == "tasks.tree":
+                    result = await self.handle_task_tree(params, request, request_id)
+                elif method == "tasks.list":
+                    result = await self.handle_tasks_list(params, request, request_id)
+                elif method == "tasks.children":
+                    result = await self.handle_task_children(params, request, request_id)
+                # Running task monitoring
+                elif method == "tasks.running.list":
+                    result = await self.handle_running_tasks_list(params, request, request_id)
+                elif method == "tasks.running.status":
+                    result = await self.handle_running_tasks_status(params, request, request_id)
+                elif method == "tasks.running.count":
+                    result = await self.handle_running_tasks_count(params, request, request_id)
+                # Task cancellation
+                elif method == "tasks.cancel" or method == "tasks.running.cancel":
+                    result = await self.handle_task_cancel(params, request, request_id)
+                # Task copy
+                elif method == "tasks.copy":
+                    result = await self.handle_task_copy(params, request, request_id)
+                # Task execution
+                elif method == "tasks.execute":
+                    result = await self.handle_task_execute(params, request, request_id)
+                else:
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "jsonrpc": "2.0",
+                            "id": body.get("id", request_id),
+                            "error": {
+                                "code": -32601,
+                                "message": "Method not found",
+                                "data": f"Unknown task method: {method}"
+                            }
+                        }
+                    )
+            
+            end_time = time.time()
+            duration = end_time - start_time
+            logger.info(f"🔍 [handle_task_requests] [{request_id}] Completed in {duration:.3f}s")
+            
+            return JSONResponse(
+                content={
+                    "jsonrpc": "2.0",
+                    "id": body.get("id", request_id),
+                    "result": result
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"Error handling task request: {str(e)}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "jsonrpc": "2.0",
+                    "id": body.get("id", str(uuid.uuid4())),
+                    "error": {
+                        "code": -32603,
+                        "message": "Internal error",
+                        "data": str(e)
+                    }
+                }
+            )
+    
+    async def handle_task_detail(
+        self,
+        params: dict,
+        request: Request,
+        request_id: str
+    ) -> Optional[dict]:
+        """
+        Handle task detail query - returns full task information including all fields
+        
+        Params:
+            task_id: Task ID to get details for
+        
+        Returns:
+            Task detail dictionary with all fields
+        """
+        try:
+            task_id = params.get("task_id")
+            if not task_id:
+                raise ValueError("Task ID is required")
+            
+            # Get database session and create repository
+            db_session = get_default_session()
+            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            
+            task = await task_repository.get_task_by_id(task_id)
+            
+            if not task:
+                return None
+            
+            # Check permission to access this task
+            self._check_permission(request, task.user_id, "access")
+            
+            return task.to_dict()
+            
+        except Exception as e:
+            logger.error(f"Error getting task detail: {str(e)}", exc_info=True)
+            raise
+    
+    async def handle_task_tree(
+        self,
+        params: dict,
+        request: Request,
+        request_id: str
+    ) -> Optional[dict]:
+        """
+        Handle task tree query - returns task tree structure
+        
+        Params:
+            task_id: Root task ID (if not provided, will find root from any task_id)
+            root_id: Optional root task ID (alternative to task_id)
+        
+        Returns:
+            Task tree structure with nested children
+        """
+        try:
+            task_id = params.get("task_id") or params.get("root_id")
+            if not task_id:
+                raise ValueError("Task ID or root_id is required")
+            
+            # Get database session and create repository
+            db_session = get_default_session()
+            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            
+            # Get task
+            task = await task_repository.get_task_by_id(task_id)
+            if not task:
+                raise ValueError(f"Task {task_id} not found")
+            
+            # Check permission to access this task
+            self._check_permission(request, task.user_id, "access")
+            
+            # If task has parent, find root first
+            root_task = await task_repository.get_root_task(task)
+            
+            # Build task tree
+            task_tree_node = await task_repository.build_task_tree(root_task)
+            
+            # Convert TaskTreeNode to dictionary format
+            def tree_node_to_dict(node):
+                """Convert TaskTreeNode to dictionary"""
+                task_dict = node.task.to_dict()
+                if node.children:
+                    task_dict["children"] = [tree_node_to_dict(child) for child in node.children]
+                return task_dict
+            
+            return tree_node_to_dict(task_tree_node)
+            
+        except Exception as e:
+            logger.error(f"Error getting task tree: {str(e)}", exc_info=True)
+            raise
+    
+    async def handle_running_tasks_list(
+        self,
+        params: dict,
+        request: Request,
+        request_id: str
+    ) -> list:
+        """
+        Handle running tasks list - returns list of currently running tasks from memory
+        
+        Params:
+            user_id: Optional user ID filter (will be checked for permission)
+            limit: Optional limit (default: 100)
+        
+        Returns:
+            List of running tasks
+        """
+        try:
+            user_id = params.get("user_id")
+            limit = params.get("limit", 100)
+            
+            # Check permission if user_id is specified
+            if user_id:
+                self._check_permission(request, user_id, "list tasks for")
+            else:
+                # No user_id specified, use authenticated user_id or None
+                authenticated_user_id, _ = self._get_user_info(request)
+                if authenticated_user_id:
+                    user_id = authenticated_user_id
+                # If no JWT and no user_id, user_id remains None (list all tasks)
+            
+            # Get running tasks from memory using TaskExecutor
+            from aipartnerupflow.core.execution.task_executor import TaskExecutor
+            task_executor = TaskExecutor()
+            running_task_ids = task_executor.get_all_running_tasks()
+            
+            if not running_task_ids:
+                return []
+            
+            # Get database session and create repository to fetch task details
+            db_session = get_default_session()
+            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            
+            # Fetch task details for running tasks
+            tasks = []
+            for task_id in running_task_ids[:limit]:  # Apply limit
+                task = await task_repository.get_task_by_id(task_id)
+                if task:
+                    # Apply user_id filter if specified
+                    if user_id and task.user_id != user_id:
+                        continue
+                    
+                    # Check permission to access this task
+                    try:
+                        self._check_permission(request, task.user_id, "access")
+                        tasks.append(task.to_dict())
+                    except ValueError:
+                        # Permission denied, skip this task
+                        logger.warning(f"Permission denied for task {task_id}")
+            
+            # Sort by created_at descending
+            tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+            
+            return tasks
+            
+        except Exception as e:
+            logger.error(f"Error getting running tasks list: {str(e)}", exc_info=True)
+            raise
+    
+    async def handle_tasks_list(
+        self,
+        params: dict,
+        request: Request,
+        request_id: str
+    ) -> list:
+        """
+        Handle tasks list - returns list of all tasks from database (not just running ones)
+        
+        Params:
+            user_id: Optional user ID filter (will be checked for permission)
+            status: Optional status filter (e.g., "completed", "pending", "in_progress", "failed")
+            root_only: Optional boolean (default: True) - if True, only return root tasks (parent_id is None)
+            limit: Optional limit (default: 100)
+            offset: Optional offset for pagination (default: 0)
+        
+        Returns:
+            List of tasks
+        """
+        try:
+            user_id = params.get("user_id")
+            status = params.get("status")
+            root_only = params.get("root_only", True)  # Default to True: only show root tasks
+            limit = params.get("limit", 100)
+            offset = params.get("offset", 0)
+            
+            # Check permission if user_id is specified
+            if user_id:
+                self._check_permission(request, user_id, "list tasks for")
+            else:
+                # No user_id specified, use authenticated user_id or None
+                authenticated_user_id, _ = self._get_user_info(request)
+                if authenticated_user_id:
+                    user_id = authenticated_user_id
+                # If no JWT and no user_id, user_id remains None (list all tasks)
+            
+            # Get database session and create repository
+            db_session = get_default_session()
+            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            
+            # Query tasks with filters
+            # If root_only is True, set parent_id to "" to filter for root tasks (parent_id is None)
+            parent_id_filter = "" if root_only else None
+            tasks = await task_repository.query_tasks(
+                user_id=user_id,
+                status=status,
+                parent_id=parent_id_filter,
+                limit=limit,
+                offset=offset,
+                order_by="created_at",
+                order_desc=True
+            )
+            
+            # Convert to dictionaries and check permissions
+            # Also check if tasks have children for UI optimization
+            task_dicts = []
+            for task in tasks:
+                # Check permission to access this task
+                try:
+                    if task.user_id:
+                        self._check_permission(request, task.user_id, "access")
+                    
+                    task_dict = task.to_dict()
+                    
+                    # Check if task has children (if has_children field is not set or False, check database)
+                    if not task_dict.get("has_children"):
+                        # Quick check: query if there are any child tasks
+                        children = await task_repository.get_child_tasks_by_parent_id(task.id)
+                        task_dict["has_children"] = len(children) > 0
+                    
+                    task_dicts.append(task_dict)
+                except ValueError:
+                    # Permission denied, skip this task
+                    logger.warning(f"Permission denied for task {task.id}")
+            
+            return task_dicts
+            
+        except Exception as e:
+            logger.error(f"Error getting tasks list: {str(e)}", exc_info=True)
+            raise
+    
+    async def handle_task_children(
+        self,
+        params: dict,
+        request: Request,
+        request_id: str
+    ) -> list:
+        """
+        Handle task children query - returns child tasks for a given parent task
+        
+        Params:
+            parent_id: Parent task ID (required)
+            task_id: Alternative parameter name for parent_id
+        
+        Returns:
+            List of child tasks
+        """
+        try:
+            parent_id = params.get("parent_id") or params.get("task_id")
+            if not parent_id:
+                raise ValueError("Parent task ID is required. Please provide 'parent_id' or 'task_id' parameter.")
+            
+            # Get database session and create repository
+            db_session = get_default_session()
+            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            
+            # Get parent task to check permission
+            parent_task = await task_repository.get_task_by_id(parent_id)
+            if not parent_task:
+                raise ValueError(f"Parent task {parent_id} not found")
+            
+            # Check permission to access parent task
+            if parent_task.user_id:
+                self._check_permission(request, parent_task.user_id, "access")
+            
+            # Get child tasks
+            children = await task_repository.get_child_tasks_by_parent_id(parent_id)
+            
+            # Convert to dictionaries and check permissions
+            child_dicts = []
+            for child in children:
+                try:
+                    if child.user_id:
+                        self._check_permission(request, child.user_id, "access")
+                    child_dicts.append(child.to_dict())
+                except ValueError:
+                    # Permission denied, skip this child task
+                    logger.warning(f"Permission denied for child task {child.id}")
+            
+            return child_dicts
+            
+        except Exception as e:
+            logger.error(f"Error getting child tasks: {str(e)}", exc_info=True)
+            raise
+    
+    async def handle_running_tasks_status(
+        self,
+        params: dict,
+        request: Request,
+        request_id: str
+    ) -> list:
+        """
+        Handle running tasks status - returns status of multiple running tasks
+        
+        Params:
+            task_ids: List of task IDs to check status for
+            context_ids: Alternative - list of context IDs (task IDs)
+        
+        Returns:
+            List of task status dictionaries
+        """
+        try:
+            task_ids = params.get("task_ids") or params.get("context_ids", [])
+            if isinstance(task_ids, str):
+                task_ids = task_ids.split(',')
+            
+            if not task_ids:
+                return []
+            
+            # Get TaskExecutor to check if tasks are running in memory
+            from aipartnerupflow.core.execution.task_executor import TaskExecutor
+            task_executor = TaskExecutor()
+            
+            # Get database session and create repository
+            db_session = get_default_session()
+            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            
+            statuses = []
+            for task_id in task_ids:
+                task_id = task_id.strip()
+                
+                # First check if task is running in memory
+                is_running = task_executor.is_task_running(task_id)
+                
+                # Get task from database for details
+                task = await task_repository.get_task_by_id(task_id)
+                
+                if task:
+                    # Check permission to access this task
+                    try:
+                        self._check_permission(request, task.user_id, "access")
+                        statuses.append({
+                            "task_id": task.id,
+                            "context_id": task.id,  # For A2A Protocol compatibility
+                            "status": task.status,
+                            "progress": float(task.progress) if task.progress else 0.0,
+                            "error": task.error,
+                            "is_running": is_running,  # Add in-memory running status
+                            "started_at": task.started_at.isoformat() if task.started_at else None,
+                            "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+                        })
+                    except ValueError as e:
+                        # Permission denied, skip this task
+                        logger.warning(f"Permission denied for task {task_id}: {e}")
+                        statuses.append({
+                            "task_id": task_id,
+                            "context_id": task_id,
+                            "status": "permission_denied",
+                            "progress": 0.0,
+                            "error": str(e),
+                            "is_running": is_running,
+                            "started_at": None,
+                            "updated_at": None,
+                        })
+                else:
+                    # Task not found in database, but check if it's running in memory
+                    if is_running:
+                        statuses.append({
+                            "task_id": task_id,
+                            "context_id": task_id,
+                            "status": "in_progress",  # Running but not yet saved to DB
+                            "progress": 0.0,
+                            "error": None,
+                            "is_running": True,
+                            "started_at": None,
+                            "updated_at": None,
+                        })
+                    else:
+                        statuses.append({
+                            "task_id": task_id,
+                            "context_id": task_id,
+                            "status": "not_found",
+                            "progress": 0.0,
+                            "error": None,
+                            "is_running": False,
+                            "started_at": None,
+                            "updated_at": None,
+                        })
+            
+            return statuses
+            
+        except Exception as e:
+            logger.error(f"Error getting running tasks status: {str(e)}", exc_info=True)
+            raise
+    
+    async def handle_running_tasks_count(
+        self,
+        params: dict,
+        request: Request,
+        request_id: str
+    ) -> dict:
+        """
+        Handle running tasks count - returns count of tasks by status
+        
+        Params:
+            user_id: Optional user ID filter (will be checked for permission)
+            status: Optional status filter (if not provided, returns counts for all statuses)
+        
+        Returns:
+            Dictionary with status counts
+        """
+        try:
+            user_id = params.get("user_id")
+            status_filter = params.get("status")
+            
+            # Check permission if user_id is specified
+            if user_id:
+                self._check_permission(request, user_id, "count tasks for")
+            else:
+                # No user_id specified, use authenticated user_id or None
+                authenticated_user_id, _ = self._get_user_info(request)
+                if authenticated_user_id:
+                    user_id = authenticated_user_id
+                # If no JWT and no user_id, user_id remains None (count all tasks)
+            
+            # Get running tasks count from memory using TaskExecutor
+            from aipartnerupflow.core.execution.task_executor import TaskExecutor
+            task_executor = TaskExecutor()
+            
+            if user_id:
+                # Filter by user_id: get all running tasks and filter by user_id
+                running_task_ids = task_executor.get_all_running_tasks()
+                if not running_task_ids:
+                    return {"count": 0, "user_id": user_id}
+                
+                # Get database session to check user_id
+                db_session = get_default_session()
+                task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+                
+                count = 0
+                for task_id in running_task_ids:
+                    task = await task_repository.get_task_by_id(task_id)
+                    if task and task.user_id == user_id:
+                        count += 1
+                
+                return {"count": count, "user_id": user_id}
+            else:
+                # No user_id filter, return total count from memory
+                count = task_executor.get_running_tasks_count()
+                return {"count": count}
+            
+        except Exception as e:
+            logger.error(f"Error getting running tasks count: {str(e)}", exc_info=True)
+            raise
+    
+    async def handle_task_cancel(
+        self,
+        params: dict,
+        request: Request,
+        request_id: str
+    ) -> list:
+        """
+        Handle task cancellation - cancels one or more running tasks
+        
+        This method:
+        1. Calls TaskExecutor.cancel_task() for each task
+        2. Returns cancellation results with token_usage if available
+        
+        Params:
+            task_ids: List of task IDs to cancel (required)
+            context_ids: Alternative - list of context IDs (task IDs)
+            force: Optional boolean, if True force immediate cancellation (default: False)
+            error_message: Optional custom error message for cancellation
+        
+        Returns:
+            List of cancellation result dictionaries:
+            [
+                {
+                    "task_id": str,
+                    "status": "cancelled" | "failed",
+                    "message": str,
+                    "token_usage": Dict,  # Optional, if available
+                    "result": Any,  # Optional partial result if available
+                },
+                ...
+            ]
+        """
+        try:
+            # Get task IDs from params
+            task_ids = params.get("task_ids") or params.get("context_ids", [])
+            if isinstance(task_ids, str):
+                task_ids = task_ids.split(',')
+            
+            if not task_ids:
+                return []
+            
+            # Get force flag and error message
+            force = params.get("force", False)
+            error_message = params.get("error_message")
+            if not error_message:
+                error_message = "Force cancelled by user" if force else "Cancelled by user"
+            
+            # Get TaskExecutor
+            from aipartnerupflow.core.execution.task_executor import TaskExecutor
+            task_executor = TaskExecutor()
+            
+            # Get database session for permission checking
+            db_session = get_default_session()
+            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            
+            results = []
+            for task_id in task_ids:
+                try:
+                    # Check permission: get task to verify user_id
+                    task = await task_repository.get_task_by_id(task_id)
+                    if task:
+                        # Check permission if user_id is specified
+                        if task.user_id:
+                            self._check_permission(request, task.user_id, "cancel task for")
+                    else:
+                        # Task not found, but we'll still try to cancel (might be in memory)
+                        logger.warning(f"Task {task_id} not found in database, attempting cancellation anyway")
+                    
+                    # Call TaskExecutor.cancel_task() which handles:
+                    # 1. Calling executor.cancel() if executor supports cancellation
+                    # 2. Updating database with cancelled status and token_usage
+                    cancel_result = await task_executor.cancel_task(task_id, error_message)
+                    
+                    # Add task_id to result
+                    cancel_result["task_id"] = task_id
+                    cancel_result["force"] = force
+                    
+                    results.append(cancel_result)
+                    
+                except PermissionError as e:
+                    logger.warning(f"Permission denied for cancelling task {task_id}: {str(e)}")
+                    results.append({
+                        "task_id": task_id,
+                        "status": "failed",
+                        "message": f"Permission denied: {str(e)}",
+                        "error": "permission_denied"
+                    })
+                except Exception as e:
+                    logger.error(f"Error cancelling task {task_id}: {str(e)}", exc_info=True)
+                    results.append({
+                        "task_id": task_id,
+                        "status": "error",
+                        "error": str(e)
+                    })
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error handling task cancellation: {str(e)}", exc_info=True)
+            raise
+    
+    async def handle_task_create(
+        self,
+        params: dict | list,
+        request: Request,
+        request_id: str
+    ) -> dict:
+        """
+        Handle task creation
+        
+        Unified processing: convert all inputs to tasks array format
+        
+        Params can be:
+        1. List of task objects: [{"name": "Task 1", ...}, ...]
+        2. Single task dict: {"name": "Task 1", ...} - will be converted to [{"name": "Task 1", ...}]
+        
+        All tasks in the array must have the same user_id (after resolution).
+        If tasks have different user_ids, an error will be raised.
+        
+        Params format:
+            - If list: directly the tasks array
+            - If dict: single task object (will be converted to array)
+        
+        Each task object can have:
+            - id: Task ID (optional) - if provided, ALL tasks must have id and use id for references
+            - name: Task name (required)
+            - user_id: User ID (optional, will be checked/validated, must be same for all tasks)
+            - parent_id: Parent task ID or name (optional)
+            - priority: Priority level (optional, default: 1)
+            - dependencies: Dependencies list (optional)
+            - inputs: Execution-time input parameters (optional)
+            - schemas: Task schemas (optional)
+            - params: Task parameters (optional)
+            - ... (any custom fields)
+        """
+        try:
+            # Convert params to tasks array format
+            if isinstance(params, dict):
+                # Single task - convert to array
+                tasks_array = [params]
+                logger.info(f"Creating task tree from single task (converted to array)")
+            elif isinstance(params, list):
+                # Already an array
+                tasks_array = params
+                logger.info(f"Creating task tree from {len(tasks_array)} tasks")
+            else:
+                raise ValueError("Params must be a dict (single task) or list (tasks array)")
+            
+            if not tasks_array:
+                raise ValueError("Tasks array cannot be empty")
+            
+            # Get authenticated user_id if JWT is enabled
+            authenticated_user_id = None
+            if self.verify_token_func:
+                authenticated_user_id, _ = self._get_user_info(request)
+            
+            # Collect all user_ids from tasks array
+            task_user_ids = set()
+            for task_data in tasks_array:
+                task_user_id = task_data.get("user_id")
+                if task_user_id:
+                    task_user_ids.add(task_user_id)
+            
+            # Resolve and validate user_id for all tasks
+            resolved_user_id = None
+            
+            if task_user_ids:
+                # Tasks have user_id specified - all must be the same
+                if len(task_user_ids) > 1:
+                    raise ValueError(
+                        f"All tasks must have the same user_id. Found multiple user_ids: {task_user_ids}"
+                    )
+                
+                # Get the single user_id
+                specified_user_id = task_user_ids.pop()
+                
+                # Check permission
+                resolved_user_id = self._check_permission(request, specified_user_id, "create tasks for")
+                if resolved_user_id:
+                    # Use resolved user_id (may be authenticated_user_id for admin case)
+                    resolved_user_id = resolved_user_id
+                else:
+                    # No JWT, use specified user_id
+                    resolved_user_id = specified_user_id
+                
+                # Ensure all tasks use the same resolved user_id
+                for task_data in tasks_array:
+                    if task_data.get("user_id"):
+                        task_data["user_id"] = resolved_user_id
+            else:
+                # No user_id in tasks - use authenticated user_id or None
+                if authenticated_user_id:
+                    resolved_user_id = authenticated_user_id
+                    # Set user_id for all tasks
+                    for task_data in tasks_array:
+                        if "user_id" not in task_data:
+                            task_data["user_id"] = resolved_user_id
+                else:
+                    # No JWT and no user_id in tasks, allow None (no user restriction)
+                    resolved_user_id = None
+            
+            # Get database session and create TaskCreator
+            db_session = get_default_session()
+            task_creator = TaskCreator(db_session)
+            
+            # Create task tree from array
+            task_tree = await task_creator.create_task_tree_from_array(
+                tasks=tasks_array,
+            )
+            
+            # Convert task tree to dictionary format for response
+            def tree_node_to_dict(node):
+                """Convert TaskTreeNode to dictionary"""
+                task_dict = node.task.to_dict()
+                if node.children:
+                    task_dict["children"] = [tree_node_to_dict(child) for child in node.children]
+                return task_dict
+            
+            result = tree_node_to_dict(task_tree)
+            
+            logger.info(f"Created task tree: root task {task_tree.task.name} "
+                       f"with {len(task_tree.children)} direct children")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error creating task: {str(e)}", exc_info=True)
+            raise
+    
+    async def handle_task_get(
+        self,
+        params: dict,
+        request: Request,
+        request_id: str
+    ) -> Optional[dict]:
+        """Handle task retrieval by ID"""
+        try:
+            task_id = params.get("task_id") or params.get("id")
+            if not task_id:
+                raise ValueError("Task ID is required. Please provide 'task_id' or 'id' parameter.")
+            
+            # Get database session and create repository with custom TaskModel
+            db_session = get_default_session()
+            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            
+            task = await task_repository.get_task_by_id(task_id)
+            
+            if not task:
+                return None
+            
+            # Check permission to access this task
+            self._check_permission(request, task.user_id, "access")
+            
+            return task.to_dict()
+            
+        except Exception as e:
+            logger.error(f"Error getting task: {str(e)}", exc_info=True)
+            raise
+    
+    async def handle_task_update(
+        self,
+        params: dict,
+        request: Request,
+        request_id: str
+    ) -> dict:
+        """Handle task update"""
+        try:
+            task_id = params.get("task_id")
+            if not task_id:
+                raise ValueError("Task ID is required")
+            
+            # Get database session and create repository with custom TaskModel
+            db_session = get_default_session()
+            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            
+            # Get task first
+            task = await task_repository.get_task_by_id(task_id)
+            if not task:
+                raise ValueError(f"Task {task_id} not found")
+            
+            # Check permission to update this task
+            self._check_permission(request, task.user_id, "update")
+            
+            # Update status if provided
+            status = params.get("status")
+            if status:
+                from datetime import datetime, timezone
+                await task_repository.update_task_status(
+                    task_id=task_id,
+                    status=status,
+                    error=params.get("error"),
+                    result=params.get("result"),
+                    progress=params.get("progress"),
+                    started_at=params.get("started_at"),
+                    completed_at=params.get("completed_at"),
+                )
+            
+            # Update inputs if provided
+            inputs = params.get("inputs")
+            if inputs is not None:
+                await task_repository.update_task_inputs(task_id, inputs)
+            
+            # Refresh task to get updated values
+            updated_task = await task_repository.get_task_by_id(task_id)
+            if not updated_task:
+                raise ValueError(f"Task {task_id} not found after update")
+            
+            logger.info(f"Updated task {task_id}")
+            return updated_task.to_dict()
+            
+        except Exception as e:
+            logger.error(f"Error updating task: {str(e)}", exc_info=True)
+            raise
+    
+    async def handle_task_delete(
+        self,
+        params: dict,
+        request: Request,
+        request_id: str
+    ) -> dict:
+        """Handle task deletion"""
+        try:
+            task_id = params.get("task_id")
+            if not task_id:
+                raise ValueError("Task ID is required")
+            
+            # Get database session and create repository with custom TaskModel
+            db_session = get_default_session()
+            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            
+            # Get task first to check if exists
+            task = await task_repository.get_task_by_id(task_id)
+            if not task:
+                raise ValueError(f"Task {task_id} not found")
+            
+            # Check permission to delete this task
+            self._check_permission(request, task.user_id, "delete")
+            
+            # Delete task
+            # Note: TaskRepository doesn't have delete method yet, so we'll mark as deleted or remove
+            # For now, we'll update status to "deleted" (if we add that status)
+            # Or we can add a delete method to TaskRepository
+            from datetime import datetime, timezone
+            await task_repository.update_task_status(
+                task_id=task_id,
+                status="deleted",
+                completed_at=datetime.now(timezone.utc),
+            )
+            
+            logger.info(f"Deleted task {task_id}")
+            return {"success": True, "task_id": task_id}
+            
+        except Exception as e:
+            logger.error(f"Error deleting task: {str(e)}", exc_info=True)
+            raise
+    
+    async def handle_task_copy(
+        self,
+        params: dict,
+        request: Request,
+        request_id: str
+    ) -> dict:
+        """Handle task copy (create_task_copy)"""
+        try:
+            task_id = params.get("task_id")
+            if not task_id:
+                raise ValueError("Task ID is required")
+            
+            # Get database session and create repository with custom TaskModel
+            db_session = get_default_session()
+            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            
+            # Get original task
+            original_task = await task_repository.get_task_by_id(task_id)
+            if not original_task:
+                raise ValueError(f"Task {task_id} not found")
+            
+            # Check permission to copy this task
+            self._check_permission(request, original_task.user_id, "copy")
+            
+            # Create TaskCreator and copy task
+            task_creator = TaskCreator(db_session)
+            
+            new_tree = await task_creator.create_task_copy(original_task)
+            
+            # Convert task tree to dictionary format for response
+            def tree_node_to_dict(node):
+                """Convert TaskTreeNode to dictionary"""
+                task_dict = node.task.to_dict()
+                if node.children:
+                    task_dict["children"] = [tree_node_to_dict(child) for child in node.children]
+                return task_dict
+            
+            result = tree_node_to_dict(new_tree)
+            
+            logger.info(f"Copied task {task_id} to new task {new_tree.task.id}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error copying task: {str(e)}", exc_info=True)
+            raise
+    
+    async def handle_task_execute(
+        self,
+        params: dict,
+        request: Request,
+        request_id: str
+    ) -> dict:
+        """
+        Handle task execution - execute a task by ID
+        
+        Params:
+            task_id: Task ID to execute
+            use_streaming: Optional, if True, use streaming mode (default: False)
+        
+        Returns:
+            {
+                "success": True,
+                "protocol": "jsonrpc",  # Protocol identifier for easy identification
+                "root_task_id": str,
+                "task_id": str,
+                "status": str,
+                "message": str,
+                "streaming": bool,  # Optional: only present if use_streaming=True
+                "events_url": str   # Optional: only present if use_streaming=True
+            }
+            If use_streaming=True, updates are available via /events?task_id={root_task_id}
+        """
+        try:
+            task_id = params.get("task_id") or params.get("id")
+            if not task_id:
+                raise ValueError("Task ID is required")
+            
+            use_streaming = params.get("use_streaming", False)
+            
+            # Get database session and create repository
+            db_session = get_default_session()
+            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            
+            # Get task
+            task = await task_repository.get_task_by_id(task_id)
+            if not task:
+                raise ValueError(f"Task {task_id} not found")
+            
+            # Check permission
+            self._check_permission(request, task.user_id, "execute")
+            
+            # Check if task is already running
+            from aipartnerupflow.core.execution.task_tracker import TaskTracker
+            task_tracker = TaskTracker()
+            if task_tracker.is_task_running(task_id):
+                return {
+                    "success": False,
+                    "protocol": "jsonrpc",
+                    "root_task_id": task_id,
+                    "status": "already_running",
+                    "message": f"Task {task_id} is already running"
+                }
+            
+            # Build task tree starting from this task
+            task_tree = await task_repository.build_task_tree(task)
+            
+            # Get root task ID (traverse up to find root)
+            root_task = await task_repository.get_root_task(task)
+            root_task_id = root_task.id
+            
+            # Execute task tree using TaskExecutor
+            from aipartnerupflow.core.execution.task_executor import TaskExecutor
+            task_executor = TaskExecutor()
+            
+            if use_streaming:
+                # Streaming mode: create streaming context and execute with streaming
+                streaming_context = TaskStreamingContext(root_task_id)
+                
+                try:
+                    # Execute with streaming
+                    execution_result = await task_executor.execute_task_tree(
+                        task_tree=task_tree,
+                        root_task_id=root_task_id,
+                        use_streaming=True,
+                        streaming_callbacks_context=streaming_context,
+                        db_session=db_session
+                    )
+                    
+                    logger.info(f"Task {task_id} execution started with streaming (root: {root_task_id})")
+                    
+                    return {
+                        "success": True,
+                        "protocol": "jsonrpc",
+                        "root_task_id": root_task_id,
+                        "task_id": task_id,
+                        "status": "started",
+                        "streaming": True,
+                        "message": f"Task {task_id} execution started with streaming. Listen to /events?task_id={root_task_id} for updates.",
+                        "events_url": f"/events?task_id={root_task_id}"
+                    }
+                finally:
+                    # Close streaming context after execution completes
+                    await streaming_context.close()
+            else:
+                # Non-streaming mode: execute in background and return immediately
+                # Task execution happens asynchronously, similar to streaming mode
+                asyncio.create_task(
+                    task_executor.execute_task_tree(
+                        task_tree=task_tree,
+                        root_task_id=root_task_id,
+                        use_streaming=False,
+                        streaming_callbacks_context=None,
+                        db_session=db_session
+                    )
+                )
+                
+                logger.info(f"Task {task_id} execution started (root: {root_task_id})")
+                
+                return {
+                    "success": True,
+                    "protocol": "jsonrpc",
+                    "root_task_id": root_task_id,
+                    "task_id": task_id,
+                    "status": "started",
+                    "message": f"Task {task_id} execution started",
+                }
+            
+        except Exception as e:
+            logger.error(f"Error executing task: {str(e)}", exc_info=True)
+            raise
+
