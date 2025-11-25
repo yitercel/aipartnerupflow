@@ -11,6 +11,7 @@ import time
 from typing import Optional, Dict, Any, List
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+import httpx
 
 from aipartnerupflow.api.routes.base import BaseRouteHandler
 from aipartnerupflow.core.storage import get_default_session
@@ -95,6 +96,188 @@ async def get_task_streaming_events(root_task_id: str) -> List[Dict[str, Any]]:
     """
     async with _task_streaming_events_lock:
         return _task_streaming_events.get(root_task_id, []).copy()
+
+
+class WebhookStreamingContext:
+    """
+    Streaming context for JSON-RPC tasks.execute endpoint with webhook callbacks
+    Similar to TaskStreamingContext but sends updates via HTTP webhook instead of storing in memory
+    """
+    
+    def __init__(self, root_task_id: str, webhook_config: Dict[str, Any]):
+        """
+        Initialize webhook streaming context
+        
+        Args:
+            root_task_id: Root task ID for this execution
+            webhook_config: Webhook configuration dict with:
+                - url (str, required): Webhook callback URL
+                - headers (dict, optional): HTTP headers to include in requests
+                - method (str, optional): HTTP method (default: "POST")
+                - timeout (float, optional): Request timeout in seconds (default: 30.0)
+                - max_retries (int, optional): Maximum retry attempts (default: 3)
+        """
+        self.root_task_id = root_task_id
+        self.webhook_url = webhook_config.get("url")
+        if not self.webhook_url:
+            raise ValueError("webhook_config.url is required")
+        
+        self.webhook_headers = webhook_config.get("headers", {})
+        self.webhook_method = webhook_config.get("method", "POST").upper()
+        self.timeout = webhook_config.get("timeout", 30.0)
+        self.max_retries = webhook_config.get("max_retries", 3)
+        
+        # Create HTTP client
+        self.http_client = httpx.AsyncClient(timeout=self.timeout)
+        
+        # Update queue for processing updates
+        self._update_queue = asyncio.Queue()
+        self._bridge_task = None
+        
+        # Start background task to process updates
+        self._start_bridge_task()
+    
+    def _start_bridge_task(self):
+        """Start background task to send webhook updates"""
+        async def bridge_worker():
+            while True:
+                try:
+                    update_data = await self._update_queue.get()
+                    
+                    if update_data is None:  # Sentinel to stop
+                        break
+                    
+                    # Send update to webhook URL
+                    await self._send_webhook_update(update_data)
+                    
+                    self._update_queue.task_done()
+                except Exception as e:
+                    logger.error(f"Error in webhook bridge worker: {str(e)}")
+        
+        self._bridge_task = asyncio.create_task(bridge_worker())
+    
+    async def _send_webhook_update(self, update_data: Dict[str, Any]) -> None:
+        """
+        Send update to webhook URL with retry mechanism
+        
+        Args:
+            update_data: Progress update data from TaskManager
+        """
+        # Format webhook payload (similar to A2A protocol format)
+        webhook_payload = {
+            "protocol": "jsonrpc",
+            "root_task_id": self.root_task_id,
+            "task_id": update_data.get("task_id", self.root_task_id),
+            "status": update_data.get("status", "in_progress"),
+            "progress": update_data.get("progress", 0.0),
+            "message": update_data.get("message", ""),
+            "type": update_data.get("type", "progress"),
+            "timestamp": update_data.get("timestamp"),
+            "final": update_data.get("final", False),
+        }
+        
+        # Add optional fields
+        if "result" in update_data:
+            webhook_payload["result"] = update_data["result"]
+        if "error" in update_data:
+            webhook_payload["error"] = update_data["error"]
+        
+        # Retry logic
+        last_exception = None
+        for attempt in range(self.max_retries):
+            try:
+                # Prepare headers
+                headers = {
+                    "Content-Type": "application/json",
+                    **self.webhook_headers
+                }
+                
+                # Send HTTP request
+                if self.webhook_method == "POST":
+                    response = await self.http_client.post(
+                        self.webhook_url,
+                        json=webhook_payload,
+                        headers=headers
+                    )
+                elif self.webhook_method == "PUT":
+                    response = await self.http_client.put(
+                        self.webhook_url,
+                        json=webhook_payload,
+                        headers=headers
+                    )
+                else:
+                    raise ValueError(f"Unsupported HTTP method: {self.webhook_method}")
+                
+                # Check response status (httpx response.raise_for_status is synchronous)
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError:
+                    # Re-raise as HTTPStatusError for proper handling
+                    raise
+                
+                logger.debug(
+                    f"Webhook update sent successfully to {self.webhook_url} "
+                    f"(attempt {attempt + 1}/{self.max_retries})"
+                )
+                return  # Success, exit retry loop
+                
+            except httpx.HTTPStatusError as e:
+                # HTTP error (4xx, 5xx) - may retry for 5xx, but not for 4xx
+                if 400 <= e.response.status_code < 500:
+                    # Client error (4xx) - don't retry
+                    logger.error(
+                        f"Webhook callback failed with client error {e.response.status_code}: {e.response.text}"
+                    )
+                    raise
+                else:
+                    # Server error (5xx) - retry
+                    last_exception = e
+                    logger.warning(
+                        f"Webhook callback failed with server error {e.response.status_code} "
+                        f"(attempt {attempt + 1}/{self.max_retries}): {str(e)}"
+                    )
+                    
+            except (httpx.RequestError, httpx.TimeoutException) as e:
+                # Network error or timeout - retry
+                last_exception = e
+                logger.warning(
+                    f"Webhook callback failed with network error "
+                    f"(attempt {attempt + 1}/{self.max_retries}): {str(e)}"
+                )
+                
+            except Exception as e:
+                # Unexpected error - don't retry
+                logger.error(f"Unexpected error sending webhook update: {str(e)}")
+                raise
+            
+            # Wait before retry (exponential backoff)
+            if attempt < self.max_retries - 1:
+                wait_time = 2 ** attempt  # 1s, 2s, 4s, ...
+                await asyncio.sleep(wait_time)
+        
+        # All retries failed
+        logger.error(
+            f"Failed to send webhook update after {self.max_retries} attempts: {str(last_exception)}"
+        )
+        # Don't raise exception - log error but don't fail task execution
+    
+    async def put(self, update_data: Dict[str, Any]):
+        """
+        Put progress update to webhook bridge
+        
+        Args:
+            update_data: Progress update data from TaskManager
+        """
+        await self._update_queue.put(update_data)
+    
+    async def close(self):
+        """Close webhook bridge and stop background task"""
+        await self._update_queue.put(None)  # Sentinel to stop worker
+        if self._bridge_task:
+            await self._bridge_task
+        
+        # Close HTTP client
+        await self.http_client.aclose()
 
 
 class TaskRoutes(BaseRouteHandler):
@@ -1076,6 +1259,14 @@ class TaskRoutes(BaseRouteHandler):
         Params:
             task_id: Task ID to execute
             use_streaming: Optional, if True, use streaming mode (default: False)
+            webhook_config: Optional webhook configuration for push notifications:
+                {
+                    "url": str,  # Required: Webhook callback URL
+                    "headers": dict,  # Optional: HTTP headers
+                    "method": str,  # Optional: HTTP method (default: "POST")
+                    "timeout": float,  # Optional: Request timeout in seconds (default: 30.0)
+                    "max_retries": int  # Optional: Maximum retry attempts (default: 3)
+                }
         
         Returns:
             {
@@ -1085,10 +1276,12 @@ class TaskRoutes(BaseRouteHandler):
                 "task_id": str,
                 "status": str,
                 "message": str,
-                "streaming": bool,  # Optional: only present if use_streaming=True
-                "events_url": str   # Optional: only present if use_streaming=True
+                "streaming": bool,  # Optional: only present if use_streaming=True or webhook_config is provided
+                "events_url": str,  # Optional: only present if use_streaming=True
+                "webhook_url": str  # Optional: only present if webhook_config is provided
             }
             If use_streaming=True, updates are available via /events?task_id={root_task_id}
+            If webhook_config is provided, updates will be sent to the webhook URL
         """
         try:
             task_id = params.get("task_id") or params.get("id")
@@ -1096,6 +1289,7 @@ class TaskRoutes(BaseRouteHandler):
                 raise ValueError("Task ID is required")
             
             use_streaming = params.get("use_streaming", False)
+            webhook_config = params.get("webhook_config")
             
             # Get database session and create repository
             db_session = get_default_session()
@@ -1132,10 +1326,24 @@ class TaskRoutes(BaseRouteHandler):
             from aipartnerupflow.core.execution.task_executor import TaskExecutor
             task_executor = TaskExecutor()
             
-            if use_streaming:
-                # Streaming mode: create streaming context and execute with streaming
+            # Determine streaming context based on use_streaming and webhook_config
+            streaming_context = None
+            use_streaming_mode = use_streaming or webhook_config is not None
+            
+            if webhook_config:
+                # Webhook mode: create webhook streaming context
+                streaming_context = WebhookStreamingContext(root_task_id, webhook_config)
+                logger.info(
+                    f"Task {task_id} execution started with webhook callbacks "
+                    f"(root: {root_task_id}, url: {webhook_config.get('url')})"
+                )
+            elif use_streaming:
+                # SSE streaming mode: create streaming context for in-memory storage
                 streaming_context = TaskStreamingContext(root_task_id)
-                
+                logger.info(f"Task {task_id} execution started with streaming (root: {root_task_id})")
+            
+            if streaming_context:
+                # Streaming/webhook mode: execute with streaming context
                 try:
                     # Execute with streaming
                     execution_result = await task_executor.execute_task_tree(
@@ -1146,18 +1354,30 @@ class TaskRoutes(BaseRouteHandler):
                         db_session=db_session
                     )
                     
-                    logger.info(f"Task {task_id} execution started with streaming (root: {root_task_id})")
-                    
-                    return {
+                    # Build response based on mode
+                    response = {
                         "success": True,
                         "protocol": "jsonrpc",
                         "root_task_id": root_task_id,
                         "task_id": task_id,
                         "status": "started",
                         "streaming": True,
-                        "message": f"Task {task_id} execution started with streaming. Listen to /events?task_id={root_task_id} for updates.",
-                        "events_url": f"/events?task_id={root_task_id}"
                     }
+                    
+                    if webhook_config:
+                        response["message"] = (
+                            f"Task {task_id} execution started with webhook callbacks. "
+                            f"Updates will be sent to {webhook_config.get('url')}"
+                        )
+                        response["webhook_url"] = webhook_config.get("url")
+                    else:
+                        response["message"] = (
+                            f"Task {task_id} execution started with streaming. "
+                            f"Listen to /events?task_id={root_task_id} for updates."
+                        )
+                        response["events_url"] = f"/events?task_id={root_task_id}"
+                    
+                    return response
                 finally:
                     # Close streaming context after execution completes
                     await streaming_context.close()

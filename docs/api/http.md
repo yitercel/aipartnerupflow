@@ -842,8 +842,14 @@ Executes a task by its ID. This method builds the task tree starting from the sp
 **Parameters:**
 - `task_id` (string, required): Task ID to execute. Can also use `id` as an alias. The method will execute the entire task tree starting from this task.
 - `use_streaming` (boolean, optional): Whether to use streaming mode for real-time progress updates (default: false). If true, progress updates are sent via EventQueue (SSE/WebSocket).
+- `webhook_config` (object, optional): Webhook configuration for push notifications. If provided, task execution updates will be sent to the specified webhook URL via HTTP callbacks. This is similar to A2A Protocol's push notification feature.
+  - `url` (string, required): Webhook callback URL where updates will be sent
+  - `headers` (object, optional): HTTP headers to include in webhook requests (e.g., `{"Authorization": "Bearer token"}`)
+  - `method` (string, optional): HTTP method for webhook requests (default: "POST")
+  - `timeout` (float, optional): Request timeout in seconds (default: 30.0)
+  - `max_retries` (int, optional): Maximum retry attempts for failed webhook requests (default: 3)
 
-**Example Request:**
+**Example Request (Non-streaming):**
 ```json
 {
   "jsonrpc": "2.0",
@@ -851,6 +857,41 @@ Executes a task by its ID. This method builds the task tree starting from the sp
   "params": {
     "task_id": "task-abc-123",
     "use_streaming": false
+  },
+  "id": "execute-request-1"
+}
+```
+
+**Example Request (Streaming mode):**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tasks.execute",
+  "params": {
+    "task_id": "task-abc-123",
+    "use_streaming": true
+  },
+  "id": "execute-request-1"
+}
+```
+
+**Example Request (Webhook mode):**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tasks.execute",
+  "params": {
+    "task_id": "task-abc-123",
+    "webhook_config": {
+      "url": "https://example.com/api/task-callback",
+      "headers": {
+        "Authorization": "Bearer your-api-token",
+        "Content-Type": "application/json"
+      },
+      "method": "POST",
+      "timeout": 30.0,
+      "max_retries": 3
+    }
   },
   "id": "execute-request-1"
 }
@@ -890,6 +931,24 @@ Executes a task by its ID. This method builds the task tree starting from the sp
 }
 ```
 
+**Example Response (Webhook mode):**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "execute-request-1",
+  "result": {
+    "success": true,
+    "protocol": "jsonrpc",
+    "root_task_id": "task-abc-123",
+    "task_id": "task-abc-123",
+    "status": "started",
+    "streaming": true,
+    "message": "Task task-abc-123 execution started with webhook callbacks. Updates will be sent to https://example.com/callback",
+    "webhook_url": "https://example.com/callback"
+  }
+}
+```
+
 **Response Fields:**
 - `success` (boolean): Whether execution was started successfully
 - `protocol` (string): Protocol identifier, always `"jsonrpc"` for this endpoint. Used to distinguish from A2A protocol responses.
@@ -897,20 +956,64 @@ Executes a task by its ID. This method builds the task tree starting from the sp
 - `task_id` (string): ID of the task that was executed
 - `status` (string): Execution status ("started", "already_running", "failed")
 - `message` (string): Status message
-- `streaming` (boolean, optional): Present only when `use_streaming=true`. Indicates that streaming mode is enabled.
-- `events_url` (string, optional): Present only when `use_streaming=true`. URL endpoint to listen for streaming updates.
+- `streaming` (boolean, optional): Present when `use_streaming=true` or `webhook_config` is provided. Indicates that streaming/webhook mode is enabled.
+- `events_url` (string, optional): Present only when `use_streaming=true` (without webhook). URL endpoint to listen for streaming updates.
+- `webhook_url` (string, optional): Present only when `webhook_config` is provided. The webhook URL where updates will be sent.
 
 **Error Cases:**
 - Task not found: Returns error with code -32602
 - Permission denied: Returns error with code -32001
 - Task already running: Returns success=false with status "already_running"
 
+**Webhook Callback Format:**
+
+When `webhook_config` is provided, the server will send HTTP POST requests to your webhook URL with the following payload format:
+
+```json
+{
+  "protocol": "jsonrpc",
+  "root_task_id": "task-abc-123",
+  "task_id": "task-abc-123",
+  "status": "completed",
+  "progress": 1.0,
+  "message": "Task execution completed",
+  "type": "final",
+  "timestamp": "2024-01-01T12:00:00Z",
+  "final": true,
+  "result": {
+    "status": "completed",
+    "progress": 1.0,
+    "root_task_id": "task-abc-123",
+    "task_count": 1
+  }
+}
+```
+
+**Webhook Update Types:**
+
+The server sends different types of updates during task execution:
+- `task_start`: Task execution started
+- `progress`: Progress update (status, progress percentage)
+- `task_completed`: Task completed successfully
+- `task_failed`: Task execution failed
+- `final`: Final status update (always sent at the end)
+
+**Webhook Retry Behavior:**
+
+- The server automatically retries failed webhook requests up to `max_retries` times
+- Retries use exponential backoff (1s, 2s, 4s, ...)
+- Client errors (4xx) are not retried
+- Server errors (5xx) and network errors are retried
+- Webhook failures are logged but do not affect task execution
+
 **Notes:**
 - The method executes the entire task tree starting from the specified task
 - If the task has a parent, the root task is found and the entire tree is executed
 - Task execution is asynchronous - the method returns immediately after starting execution
 - Use `tasks.running.status` to check execution progress
-- Use `use_streaming=true` to receive real-time progress updates via EventQueue
+- Use `use_streaming=true` to receive real-time progress updates via EventQueue (SSE)
+- Use `webhook_config` to receive updates via HTTP callbacks (similar to A2A Protocol push notifications)
+- `webhook_config` and `use_streaming` can be used together, but webhook takes precedence for update delivery
 - Tasks are executed following dependency order and priority
 - All responses include `protocol: "jsonrpc"` field to identify this as a JSON-RPC protocol response
 - This differs from A2A Protocol responses (which use `protocol: "a2a"` in metadata and event data)
