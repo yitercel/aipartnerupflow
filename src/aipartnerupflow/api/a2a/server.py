@@ -109,6 +109,7 @@ def create_a2a_server(
     verify_token_algorithm: str = "HS256",
     base_url: Optional[str] = None,
     enable_system_routes: bool = True,
+    enable_docs: bool = True,
 ) -> CustomA2AStarletteApplication:
     """
     Create A2A server instance with configuration
@@ -142,6 +143,8 @@ def create_a2a_server(
                                Used only if verify_token_secret_key is provided and verify_token_func is None.
         base_url: Base URL of the service. Used in agent card.
         enable_system_routes: Whether to enable system routes like /system (default: True)
+        enable_docs: Whether to enable interactive API documentation at /docs (default: True).
+                    Only available when API server is running, not when used as a library.
     
     Returns:
         CustomA2AStarletteApplication instance
@@ -185,6 +188,7 @@ def create_a2a_server(
         http_handler=request_handler,
         verify_token_func=verify_token_func,
         enable_system_routes=enable_system_routes,
+        enable_docs=enable_docs,
         task_model_class=final_task_model_class,
     )
 

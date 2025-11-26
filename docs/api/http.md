@@ -8,7 +8,7 @@ The aipartnerupflow API server provides:
 - **A2A Protocol Server**: Standard agent-to-agent communication protocol
 - **Task Management**: Create, read, update, and delete tasks
 - **Task Execution**: Execute task trees with dependency management
-- **Real-time Streaming**: Progress updates via EventQueue (SSE/WebSocket)
+- **Real-time Streaming**: Progress updates via Server-Sent Events (SSE) and WebSocket
 - **JWT Authentication**: Optional token-based authentication
 
 ## Base URL
@@ -294,7 +294,7 @@ curl -X POST http://localhost:8000/ \
 **Notes:**
 - This endpoint implements the A2A Protocol standard
 - When `push_notification_config` is provided, the server executes tasks asynchronously and sends updates to the callback URL
-- When `metadata.stream` is true, progress updates are sent via EventQueue (SSE/WebSocket)
+- When `metadata.stream` is true, progress updates are sent via EventQueue (SSE/WebSocket). For JSON-RPC `tasks.execute`, use `use_streaming=true` instead.
 - Task execution follows dependency order and priority scheduling
 - All tasks in a tree must have the same `user_id` (or be accessible by the authenticated user)
 - All responses include `protocol: "a2a"` in Task metadata and event data to identify this as an A2A Protocol response
@@ -841,7 +841,7 @@ Executes a task by its ID. This method builds the task tree starting from the sp
 
 **Parameters:**
 - `task_id` (string, required): Task ID to execute. Can also use `id` as an alias. The method will execute the entire task tree starting from this task.
-- `use_streaming` (boolean, optional): Whether to use streaming mode for real-time progress updates (default: false). If true, progress updates are sent via EventQueue (SSE/WebSocket).
+- `use_streaming` (boolean, optional): Whether to use streaming mode for real-time progress updates (default: false). If true, the endpoint returns a `StreamingResponse` with Server-Sent Events (SSE) instead of a JSON response.
 - `webhook_config` (object, optional): Webhook configuration for push notifications. If provided, task execution updates will be sent to the specified webhook URL via HTTP callbacks. This is similar to A2A Protocol's push notification feature.
   - `url` (string, required): Webhook callback URL where updates will be sent
   - `headers` (object, optional): HTTP headers to include in webhook requests (e.g., `{"Authorization": "Bearer token"}`)
@@ -914,22 +914,27 @@ Executes a task by its ID. This method builds the task tree starting from the sp
 ```
 
 **Example Response (Streaming mode):**
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "execute-request-1",
-  "result": {
-    "success": true,
-    "protocol": "jsonrpc",
-    "root_task_id": "task-abc-123",
-    "task_id": "task-abc-123",
-    "status": "started",
-    "streaming": true,
-    "message": "Task task-abc-123 execution started with streaming. Listen to /events?task_id=task-abc-123 for updates.",
-    "events_url": "/events?task_id=task-abc-123"
-  }
-}
+When `use_streaming=true`, the response is a Server-Sent Events (SSE) stream with `Content-Type: text/event-stream`.
+
+The first event contains the initial JSON-RPC response:
 ```
+data: {"jsonrpc": "2.0", "id": "execute-request-1", "result": {"success": true, "protocol": "jsonrpc", "root_task_id": "task-abc-123", "task_id": "task-abc-123", "status": "started", "streaming": true, "message": "Task task-abc-123 execution started with streaming"}}
+
+```
+
+Subsequent events contain real-time progress updates:
+```
+data: {"type": "progress", "task_id": "task-abc-123", "status": "in_progress", "progress": 0.5, "message": "Task tree execution started", "timestamp": "2025-11-26T08:00:00"}
+
+data: {"type": "task_completed", "task_id": "task-abc-123", "status": "completed", "result": {...}, "timestamp": "2025-11-26T08:00:05"}
+
+data: {"type": "final", "task_id": "task-abc-123", "status": "completed", "result": {"progress": 1.0}, "final": true, "timestamp": "2025-11-26T08:00:05"}
+
+data: {"type": "stream_end", "task_id": "task-abc-123"}
+
+```
+
+**Note:** When `use_streaming=true`, you must parse the SSE stream format (`data: {...}`) instead of expecting a JSON response.
 
 **Example Response (Webhook mode):**
 ```json
@@ -957,7 +962,6 @@ Executes a task by its ID. This method builds the task tree starting from the sp
 - `status` (string): Execution status ("started", "already_running", "failed")
 - `message` (string): Status message
 - `streaming` (boolean, optional): Present when `use_streaming=true` or `webhook_config` is provided. Indicates that streaming/webhook mode is enabled.
-- `events_url` (string, optional): Present only when `use_streaming=true` (without webhook). URL endpoint to listen for streaming updates.
 - `webhook_url` (string, optional): Present only when `webhook_config` is provided. The webhook URL where updates will be sent.
 
 **Error Cases:**
@@ -1011,9 +1015,10 @@ The server sends different types of updates during task execution:
 - If the task has a parent, the root task is found and the entire tree is executed
 - Task execution is asynchronous - the method returns immediately after starting execution
 - Use `tasks.running.status` to check execution progress
-- Use `use_streaming=true` to receive real-time progress updates via EventQueue (SSE)
-- Use `webhook_config` to receive updates via HTTP callbacks (similar to A2A Protocol push notifications)
-- `webhook_config` and `use_streaming` can be used together, but webhook takes precedence for update delivery
+- Use `use_streaming=true` to receive real-time progress updates via Server-Sent Events (SSE) - the response will be a streaming response instead of JSON
+- The SSE stream includes the initial JSON-RPC response as the first event, followed by real-time progress updates
+- Use `webhook_config` to receive updates via HTTP callbacks (independent of response mode)
+- `webhook_config` and `use_streaming` can be used together - webhook callbacks will be sent regardless of response mode
 - Tasks are executed following dependency order and priority
 - All responses include `protocol: "jsonrpc"` field to identify this as a JSON-RPC protocol response
 - This differs from A2A Protocol responses (which use `protocol: "a2a"` in metadata and event data)
@@ -1833,78 +1838,62 @@ All endpoints return JSON-RPC 2.0 error format on failure:
 
 ## Streaming Support
 
-The API supports real-time progress updates via A2A Protocol's EventQueue. This allows clients to receive live updates about task execution progress without polling.
+The API supports real-time progress updates via Server-Sent Events (SSE) and WebSocket. This allows clients to receive live updates about task execution progress without polling.
 
-### `GET /events` (Server-Sent Events)
+### Server-Sent Events (SSE) via `tasks.execute`
 
 **Description:**  
-Server-Sent Events (SSE) endpoint for receiving real-time task execution updates. This endpoint maintains a persistent HTTP connection and streams events as they occur. Clients can subscribe to specific task updates or receive all updates.
+When using `tasks.execute` with `use_streaming=true`, the endpoint returns a `StreamingResponse` with Server-Sent Events (SSE). The response stream includes the initial JSON-RPC response followed by real-time progress updates.
 
-**Authentication:**  
-Optional (JWT token in `Authorization` header if JWT is enabled)
+**Usage:**
+Set `use_streaming=true` in the `tasks.execute` request parameters. The endpoint will return a streaming response with `Content-Type: text/event-stream`.
 
-**Request Parameters:**
-- `task_id` (string, optional): Filter events for a specific task ID. If not provided, receives events for all tasks.
-- `context_id` (string, optional): Alternative parameter name for task_id (A2A Protocol compatibility)
+**Example Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tasks.execute",
+  "params": {
+    "task_id": "task-abc-123",
+    "use_streaming": true
+  },
+  "id": "execute-request-1"
+}
+```
 
-**Connection:**
-- Method: GET
-- Headers: Standard HTTP headers, plus optional `Authorization: Bearer <token>`
-- Content-Type: `text/event-stream`
-- Connection: Keep-Alive
-
-**Event Format:**
-Each event is sent as a Server-Sent Event with the following format:
+**Response Format:**
+The response is an SSE stream. The first event contains the initial JSON-RPC response:
+```
+data: {"jsonrpc": "2.0", "id": "execute-request-1", "result": {"success": true, "protocol": "jsonrpc", "root_task_id": "task-abc-123", "task_id": "task-abc-123", "status": "started", "streaming": true, "message": "Task task-abc-123 execution started with streaming"}}
 
 ```
-data: {"type": "task_progress", "task_id": "task-abc-123", "data": {"progress": 0.5, "status": "in_progress"}}
+
+Subsequent events contain real-time progress updates:
+```
+data: {"type": "progress", "task_id": "task-abc-123", "status": "in_progress", "progress": 0.5, "message": "Task tree execution started", "timestamp": "2025-11-26T08:00:00"}
+
+data: {"type": "task_completed", "task_id": "task-abc-123", "status": "completed", "result": {...}, "timestamp": "2025-11-26T08:00:05"}
+
+data: {"type": "final", "task_id": "task-abc-123", "status": "completed", "result": {"progress": 1.0}, "final": true, "timestamp": "2025-11-26T08:00:05"}
+
+data: {"type": "stream_end", "task_id": "task-abc-123"}
 
 ```
 
 **Event Types:**
-- `task_progress`: Task progress update
-- `task_status`: Task status change
-- `task_completed`: Task completion notification
-- `task_failed`: Task failure notification
-
-**Example Request:**
-```bash
-curl -N -H "Accept: text/event-stream" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  "http://localhost:8000/events?task_id=task-abc-123"
-```
-
-**Example Event Stream:**
-```
-data: {"type": "task_progress", "task_id": "task-abc-123", "data": {"progress": 0.1, "status": "in_progress"}}
-
-data: {"type": "task_progress", "task_id": "task-abc-123", "data": {"progress": 0.5, "status": "in_progress"}}
-
-data: {"type": "task_completed", "task_id": "task-abc-123", "data": {"progress": 1.0, "status": "completed"}}
-
-```
-
-**Event Data Structure:**
-```json
-{
-  "type": "task_progress",
-  "task_id": "task-abc-123",
-  "context_id": "task-abc-123",
-  "data": {
-    "progress": 0.5,
-    "status": "in_progress",
-    "root_task_id": "task-abc-123",
-    "task_count": 2
-  }
-}
-```
+- `progress`: Task progress update
+- `task_start`: Task execution started
+- `task_completed`: Task completed successfully
+- `task_failed`: Task execution failed
+- `final`: Final status update (always sent at the end)
+- `stream_end`: Stream connection closed
 
 **Notes:**
-- Connection remains open until client disconnects or task completes
+- Connection remains open until task completes or client disconnects
 - Events are sent in real-time as tasks execute
-- Use `task_id` parameter to filter events for specific tasks
-- Connection automatically reconnects if dropped (browser behavior)
+- Must parse SSE format (`data: {...}`) instead of expecting JSON response
 - Suitable for web applications and simple client implementations
+- Can be combined with `webhook_config` for dual update delivery
 
 ### `WebSocket /ws`
 
@@ -1981,7 +1970,7 @@ ws.onclose = () => {
 ```
 
 **Event Types:**
-Same as SSE endpoint:
+Similar to SSE streaming in `tasks.execute` (when `use_streaming=true`):
 - `task_progress`: Task progress update
 - `task_status`: Task status change
 - `task_completed`: Task completion notification
@@ -1996,9 +1985,9 @@ Same as SSE endpoint:
 - Use secure WebSocket (wss://) in production environments
 - Suitable for real-time dashboards and interactive applications
 
-**Comparison: SSE vs WebSocket:**
-- **SSE**: Simpler, unidirectional (server to client), automatic reconnection, HTTP-based
-- **WebSocket**: Bidirectional, lower latency, more complex, requires custom reconnection logic
+**Comparison: SSE (via tasks.execute) vs WebSocket:**
+- **SSE (tasks.execute with use_streaming=true)**: Integrated with task execution, returns StreamingResponse directly, simpler for JSON-RPC clients, unidirectional (server to client)
+- **WebSocket (/ws)**: Lower latency, bidirectional communication, better for high-frequency updates, requires custom reconnection logic
 
 ## Examples
 
@@ -2335,6 +2324,8 @@ The server will send POST requests to your callback URL with the following paylo
 ### Streaming Mode
 
 The A2A protocol also supports streaming mode via `metadata.stream`. When enabled, the server will send multiple status update events through the EventQueue (SSE/WebSocket).
+
+**Note:** For JSON-RPC `tasks.execute` endpoint, use `use_streaming=true` parameter instead of `metadata.stream`. The endpoint will return a StreamingResponse with Server-Sent Events directly.
 
 **Request with Streaming:**
 ```json

@@ -110,11 +110,15 @@ curl http://localhost:8000/tasks?user_id=user123
 
 ### Server-Sent Events (SSE)
 
-Connect to streaming endpoint for real-time updates:
+Use `tasks.execute` with `use_streaming=true` to receive real-time updates via SSE:
 
 ```bash
-curl -N http://localhost:8000/stream/{task_id}
+curl -N -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "method": "tasks.execute", "params": {"task_id": "task-123", "use_streaming": true}, "id": 1}' \
+  http://localhost:8000/tasks
 ```
+
+The response will be a Server-Sent Events stream with real-time progress updates.
 
 ### WebSocket
 

@@ -253,6 +253,7 @@ def _create_a2a_server(
     jwt_algorithm: str,
     base_url: str,
     enable_system_routes: bool,
+    enable_docs: bool = True,
 ):
     """Create A2A Protocol Server"""
     from aipartnerupflow.api.a2a.server import create_a2a_server
@@ -265,6 +266,7 @@ def _create_a2a_server(
         f"A2A Protocol Server configuration: "
         f"JWT enabled={bool(jwt_secret_key)}, "
         f"System routes={enable_system_routes}, "
+        f"Docs={enable_docs}, "
         f"TaskModel={task_model_class.__name__}"
     )
     
@@ -273,6 +275,7 @@ def _create_a2a_server(
         verify_token_algorithm=jwt_algorithm,
         base_url=base_url,
         enable_system_routes=enable_system_routes,
+        enable_docs=enable_docs,
     )
     
     return a2a_server_instance.build()
@@ -321,6 +324,7 @@ def create_app_by_protocol(protocol: Optional[str] = None) -> Any:
     jwt_secret_key = os.getenv("AIPARTNERUPFLOW_JWT_SECRET_KEY")
     jwt_algorithm = os.getenv("AIPARTNERUPFLOW_JWT_ALGORITHM", "HS256")
     enable_system_routes = os.getenv("AIPARTNERUPFLOW_ENABLE_SYSTEM_ROUTES", "true").lower() in ("true", "1", "yes")
+    enable_docs = os.getenv("AIPARTNERUPFLOW_ENABLE_DOCS", "true").lower() in ("true", "1", "yes")
     host = os.getenv("AIPARTNERUPFLOW_API_HOST", os.getenv("API_HOST", "0.0.0.0"))
     port = int(os.getenv("AIPARTNERUPFLOW_API_PORT", os.getenv("PORT", "8000")))
     default_url = get_url_with_host_and_port(host, port)
@@ -333,6 +337,7 @@ def create_app_by_protocol(protocol: Optional[str] = None) -> Any:
             jwt_algorithm=jwt_algorithm,
             base_url=base_url,
             enable_system_routes=enable_system_routes,
+            enable_docs=enable_docs,
         )
     elif protocol == "rest":
         return _create_rest_server()

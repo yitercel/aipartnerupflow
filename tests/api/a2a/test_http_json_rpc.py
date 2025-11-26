@@ -752,21 +752,44 @@ def test_jsonrpc_tasks_execute_with_streaming(json_rpc_client):
     response = json_rpc_client.post(
         "/tasks",
         json=execute_request,
-        headers={"Content-Type": "application/json"}
+        headers={"Content-Type": "application/json", "Accept": "text/event-stream"}
     )
     
     assert response.status_code == 200
-    result = response.json()
+    # When use_streaming=True, response is SSE format (text/event-stream)
+    assert response.headers.get("content-type") == "text/event-stream; charset=utf-8"
     
-    assert "jsonrpc" in result
-    assert "result" in result
-    execution_result = result["result"]
+    # Parse SSE response
+    # SSE format: "data: {json}\n\n"
+    content = response.text
+    lines = content.split("\n")
+    
+    # Find first data line (initial JSON-RPC response)
+    initial_data = None
+    for line in lines:
+        if line.startswith("data: "):
+            data_str = line[6:]  # Remove "data: " prefix
+            try:
+                initial_data = json.loads(data_str)
+                break
+            except json.JSONDecodeError:
+                continue
+    
+    # Verify initial response
+    assert initial_data is not None, "No initial JSON-RPC response found in SSE stream"
+    assert "jsonrpc" in initial_data
+    assert initial_data["jsonrpc"] == "2.0"
+    assert "id" in initial_data
+    assert "result" in initial_data
+    
+    execution_result = initial_data["result"]
     assert execution_result["success"] is True
     assert "protocol" in execution_result
     assert execution_result["protocol"] == "jsonrpc"  # Verify protocol identifier
     assert execution_result["status"] == "started"
     assert "streaming" in execution_result
     assert execution_result["streaming"] is True
+    assert execution_result["root_task_id"] == task_id
 
 
 def test_jsonrpc_tasks_execute_with_webhook(json_rpc_client):

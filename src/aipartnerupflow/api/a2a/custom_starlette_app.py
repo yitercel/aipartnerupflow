@@ -21,7 +21,7 @@ from a2a.utils.constants import (
 
 from aipartnerupflow.core.storage.sqlalchemy.models import TaskModel
 from aipartnerupflow.core.utils.logger import get_logger
-from aipartnerupflow.api.routes import TaskRoutes, SystemRoutes
+from aipartnerupflow.api.routes import TaskRoutes, SystemRoutes, DocsRoutes
 
 logger = get_logger(__name__)
 
@@ -162,6 +162,7 @@ class CustomA2AStarletteApplication(A2AStarletteApplication):
         verify_token_func: Optional[Callable[[str], Optional[dict]]] = None,
         verify_permission_func: Optional[Callable[[str, Optional[str], Optional[list]], bool]] = None,
         enable_system_routes: bool = True,
+        enable_docs: bool = True,
         task_model_class: Optional[Type[TaskModel]] = None,
         **kwargs
     ):
@@ -187,6 +188,8 @@ class CustomA2AStarletteApplication(A2AStarletteApplication):
                                   - If user is not admin, can only access their own user_id
                                   - If target_user_id is None, permission is granted (no specific user restriction)
             enable_system_routes: Whether to enable system routes like /system (default: True)
+            enable_docs: Whether to enable interactive API documentation at /docs (default: True).
+                        Only available when API server is running, not when used as a library.
             task_model_class: Optional custom TaskModel class.
                              Users can pass their custom TaskModel subclass that inherits TaskModel
                              to add custom fields (e.g., project_id, department, etc.).
@@ -197,6 +200,7 @@ class CustomA2AStarletteApplication(A2AStarletteApplication):
         
         # Use parameter values directly (no environment variable reading)
         self.enable_system_routes = enable_system_routes
+        self.enable_docs = enable_docs
         
         # Handle verify_token_func
         self.verify_token_func = verify_token_func
@@ -219,9 +223,38 @@ class CustomA2AStarletteApplication(A2AStarletteApplication):
             verify_permission_func=self.verify_permission_func
         )
         
+        # Initialize documentation routes handler
+        # Note: We need to do this after super().__init__() so we can access self.agent_card
+        # DocsRoutes will handle OpenAPI schema generation internally
+        def get_base_url():
+            """Get base URL from agent_card or fallback"""
+            if hasattr(self, "agent_card") and hasattr(self.agent_card, "url"):
+                return self.agent_card.url
+            # Fallback: check args/kwargs if agent_card not yet set
+            if args and len(args) > 0 and hasattr(args[0], "url"):
+                return args[0].url
+            elif "agent_card" in kwargs and hasattr(kwargs["agent_card"], "url"):
+                return kwargs["agent_card"].url
+            return f"http://localhost:{os.getenv('AIPARTNERUPFLOW_PORT', '8000')}"
+        
+        self.docs_routes = DocsRoutes(
+            enable_docs=self.enable_docs,
+            agent_card=getattr(self, "agent_card", None),
+            get_base_url_func=get_base_url
+        )
+        
+        # Store openapi_schema for backward compatibility and logging
+        self.openapi_schema = self.docs_routes.openapi_schema
+        
+        # Update enable_docs if schema generation failed
+        if self.enable_docs and self.openapi_schema is None:
+            logger.warning("Documentation was enabled but schema generation failed. Disabling docs.")
+            self.enable_docs = False
+        
         logger.info(
             f"Initialized CustomA2AStarletteApplication "
             f"(System routes: {self.enable_system_routes}, "
+            f"Docs: {self.enable_docs}, "
             f"JWT auth: {self.verify_token_func is not None}, "
             f"Permission check: {self.verify_permission_func is not None}, "
             f"TaskModel: {self.task_model_class.__name__})"
@@ -283,15 +316,18 @@ class CustomA2AStarletteApplication(A2AStarletteApplication):
         if not self.enable_system_routes:
             return app_routes
         
-        # Add task management and system routes
-        # Using /tasks for task management and /system for system operations
+        # Build all custom routes in one place
+        # All custom routes: task management, system operations, and docs
+        # Note: SSE streaming is handled directly by handle_task_execute (use_streaming=True)
         custom_routes = [
+            # Task management routes
             Route(
                 "/tasks",
                 self._handle_task_requests,
                 methods=['POST'],
                 name='task_handler',
             ),
+            # System operations routes
             Route(
                 "/system",
                 self._handle_system_requests,
@@ -299,6 +335,23 @@ class CustomA2AStarletteApplication(A2AStarletteApplication):
                 name='system_handler',
             ),
         ]
+        
+        # Add documentation routes if enabled
+        if self.enable_docs and self.docs_routes.openapi_schema:
+            custom_routes.extend([
+                Route(
+                    "/docs",
+                    self.docs_routes.handle_swagger_ui,
+                    methods=['GET'],
+                    name='swagger_ui',
+                ),
+                Route(
+                    "/openapi.json",
+                    self.docs_routes.handle_openapi_json,
+                    methods=['GET'],
+                    name='openapi_json',
+                ),
+            ])
         
         # Combine standard routes with custom routes
         return app_routes + custom_routes

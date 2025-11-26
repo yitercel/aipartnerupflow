@@ -8,10 +8,11 @@ This module provides task management handlers that can be used by any protocol
 import uuid
 import asyncio
 import time
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 import httpx
+import json
 
 from aipartnerupflow.api.routes.base import BaseRouteHandler
 from aipartnerupflow.core.storage import get_default_session
@@ -280,6 +281,44 @@ class WebhookStreamingContext:
         await self.http_client.aclose()
 
 
+class CombinedStreamingContext:
+    """
+    Combined context that supports both SSE (memory storage) and webhook callbacks
+    
+    Used when user chooses SSE mode (use_streaming=True) and also requests webhook callbacks.
+    This allows real-time SSE events to be streamed to the client while simultaneously
+    sending progress updates to the webhook URL.
+    """
+    
+    def __init__(self, root_task_id: str, webhook_config: Dict[str, Any]):
+        """
+        Initialize combined streaming context
+        
+        Args:
+            root_task_id: Root task ID for this execution
+            webhook_config: Webhook configuration dict
+        """
+        self.sse_context = TaskStreamingContext(root_task_id)
+        self.webhook_context = WebhookStreamingContext(root_task_id, webhook_config)
+        self.root_task_id = root_task_id
+    
+    async def put(self, update_data: Dict[str, Any]):
+        """
+        Put progress update to both SSE and webhook contexts
+        
+        Args:
+            update_data: Progress update data from TaskManager
+        """
+        # Forward to both contexts
+        await self.sse_context.put(update_data)
+        await self.webhook_context.put(update_data)
+    
+    async def close(self):
+        """Close both contexts"""
+        await self.sse_context.close()
+        await self.webhook_context.close()
+
+
 class TaskRoutes(BaseRouteHandler):
     """
     Task management route handlers
@@ -350,7 +389,11 @@ class TaskRoutes(BaseRouteHandler):
                     result = await self.handle_task_copy(params, request, request_id)
                 # Task execution
                 elif method == "tasks.execute":
-                    result = await self.handle_task_execute(params, request, request_id)
+                    response = await self.handle_task_execute(params, request, request_id)
+                    # If handle_task_execute returns StreamingResponse (SSE mode), return it directly
+                    if isinstance(response, StreamingResponse):
+                        return response
+                    result = response
                 else:
                     return JSONResponse(
                         status_code=400,
@@ -1252,14 +1295,27 @@ class TaskRoutes(BaseRouteHandler):
         params: dict,
         request: Request,
         request_id: str
-    ) -> dict:
+    ) -> Union[dict, StreamingResponse]:
         """
         Handle task execution - execute a task by ID
         
+        Design:
+        - Users can choose one of two response modes: regular POST or SSE
+        - Users can optionally request webhook URL callbacks (independent of response mode)
+        
+        Response Modes:
+        1. Regular POST (use_streaming=False): Returns JSON response immediately, task executes in background
+        2. SSE (use_streaming=True): Returns StreamingResponse with Server-Sent Events for real-time updates
+        
+        Webhook Callbacks:
+        - Can be used with either response mode
+        - If provided, progress updates will be sent to the webhook URL via HTTP POST/PUT
+        - Webhook callbacks are independent of the response mode choice
+        
         Params:
             task_id: Task ID to execute
-            use_streaming: Optional, if True, use streaming mode (default: False)
-            webhook_config: Optional webhook configuration for push notifications:
+            use_streaming: Optional, if True, use SSE mode (default: False, regular POST mode)
+            webhook_config: Optional webhook configuration for push notifications (independent of use_streaming):
                 {
                     "url": str,  # Required: Webhook callback URL
                     "headers": dict,  # Optional: HTTP headers
@@ -1269,19 +1325,27 @@ class TaskRoutes(BaseRouteHandler):
                 }
         
         Returns:
+            Regular POST mode (use_streaming=False):
             {
                 "success": True,
-                "protocol": "jsonrpc",  # Protocol identifier for easy identification
+                "protocol": "jsonrpc",
                 "root_task_id": str,
                 "task_id": str,
-                "status": str,
+                "status": "started",
                 "message": str,
-                "streaming": bool,  # Optional: only present if use_streaming=True or webhook_config is provided
-                "events_url": str,  # Optional: only present if use_streaming=True
-                "webhook_url": str  # Optional: only present if webhook_config is provided
+                "streaming": bool,  # True if webhook_config is provided
+                "webhook_url": str  # Only present if webhook_config is provided
             }
-            If use_streaming=True, updates are available via /events?task_id={root_task_id}
+            
+            SSE mode (use_streaming=True):
+            StreamingResponse with text/event-stream media type
+            - Initial event contains JSON-RPC response with task info
+            - Subsequent events contain real-time progress updates
+            - Final event indicates completion
+            - webhook_url included in initial event if webhook_config is provided
+            
             If webhook_config is provided, updates will be sent to the webhook URL
+            regardless of the response mode.
         """
         try:
             task_id = params.get("task_id") or params.get("id")
@@ -1326,69 +1390,183 @@ class TaskRoutes(BaseRouteHandler):
             from aipartnerupflow.core.execution.task_executor import TaskExecutor
             task_executor = TaskExecutor()
             
-            # Determine streaming context based on use_streaming and webhook_config
+            # Determine streaming_context based on requirements
+            # Design: Users choose response mode (regular POST or SSE) and optionally request webhook callbacks
+            # - use_streaming controls response type: False = regular POST (JSON), True = SSE (StreamingResponse)
+            # - webhook_config is independent: if provided, webhook callbacks will be sent regardless of response mode
             streaming_context = None
-            use_streaming_mode = use_streaming or webhook_config is not None
             
-            if webhook_config:
-                # Webhook mode: create webhook streaming context
-                streaming_context = WebhookStreamingContext(root_task_id, webhook_config)
+            if use_streaming and webhook_config:
+                # SSE mode + webhook callbacks: need both memory storage (for SSE) and webhook callbacks
+                streaming_context = CombinedStreamingContext(root_task_id, webhook_config)
                 logger.info(
-                    f"Task {task_id} execution started with webhook callbacks "
-                    f"(root: {root_task_id}, url: {webhook_config.get('url')})"
+                    f"Task {task_id} execution started: SSE mode with webhook callbacks "
+                    f"(root: {root_task_id}, webhook: {webhook_config.get('url')})"
                 )
             elif use_streaming:
-                # SSE streaming mode: create streaming context for in-memory storage
+                # SSE mode only (no webhook callbacks)
                 streaming_context = TaskStreamingContext(root_task_id)
-                logger.info(f"Task {task_id} execution started with streaming (root: {root_task_id})")
+                logger.info(f"Task {task_id} execution started: SSE mode (root: {root_task_id})")
+            elif webhook_config:
+                # Regular POST mode + webhook callbacks: need streaming_context for webhook callbacks
+                streaming_context = WebhookStreamingContext(root_task_id, webhook_config)
+                logger.info(
+                    f"Task {task_id} execution started: regular POST mode with webhook callbacks "
+                    f"(root: {root_task_id}, url: {webhook_config.get('url')})"
+                )
             
-            if streaming_context:
-                # Streaming/webhook mode: execute with streaming context
-                try:
-                    # Execute with streaming
-                    execution_result = await task_executor.execute_task_tree(
-                        task_tree=task_tree,
-                        root_task_id=root_task_id,
-                        use_streaming=True,
-                        streaming_callbacks_context=streaming_context,
-                        db_session=db_session
-                    )
-                    
-                    # Build response based on mode
-                    response = {
-                        "success": True,
-                        "protocol": "jsonrpc",
-                        "root_task_id": root_task_id,
-                        "task_id": task_id,
-                        "status": "started",
-                        "streaming": True,
+            # Handle response based on use_streaming (response mode)
+            # Response mode 1: SSE (use_streaming=True) - return StreamingResponse with real-time events
+            if use_streaming:
+                # SSE mode: return StreamingResponse
+                # streaming_context must be set (either TaskStreamingContext or CombinedStreamingContext)
+                if not streaming_context:
+                    raise ValueError("streaming_context is required for SSE mode")
+                
+                async def sse_event_generator():
+                    """Generate SSE events from task execution"""
+                    try:
+                        # Send initial response as JSON-RPC result
+                        initial_response = {
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "result": {
+                                "success": True,
+                                "protocol": "jsonrpc",
+                                "root_task_id": root_task_id,
+                                "task_id": task_id,
+                                "status": "started",
+                                "streaming": True,
+                                "message": f"Task {task_id} execution started with streaming",
+                                **({"webhook_url": webhook_config.get("url")} if webhook_config else {})
+                            }
+                        }
+                        yield f"data: {json.dumps(initial_response, ensure_ascii=False)}\n\n"
+                        
+                        # Start task execution in background
+                        execution_task = asyncio.create_task(
+                            task_executor.execute_task_tree(
+                                task_tree=task_tree,
+                                root_task_id=root_task_id,
+                                use_streaming=True,  # Need streaming for callbacks
+                                streaming_callbacks_context=streaming_context,
+                                db_session=db_session
+                            )
+                        )
+                        
+                        # Poll for events and stream them
+                        # Events are stored in global _task_streaming_events by root_task_id
+                        # Works for both TaskStreamingContext and CombinedStreamingContext
+                        last_event_count = 0
+                        max_wait_time = 300  # Maximum wait time in seconds (5 minutes)
+                        wait_time = 0
+                        check_interval = 0.3  # Check for new events every 0.3 seconds
+                        
+                        while wait_time < max_wait_time:
+                            # Get all events for this task
+                            events = await get_task_streaming_events(root_task_id)
+                            
+                            # Send any new events
+                            if len(events) > last_event_count:
+                                for i in range(last_event_count, len(events)):
+                                    event = events[i]
+                                    # Format as SSE: data: {json}\n\n
+                                    event_data = json.dumps(event, ensure_ascii=False)
+                                    yield f"data: {event_data}\n\n"
+                                
+                                last_event_count = len(events)
+                                
+                                # Check if final event (task completed or failed)
+                                if events and events[-1].get("final", False):
+                                    # Wait for execution task to complete
+                                    try:
+                                        await execution_task
+                                    except Exception as e:
+                                        logger.error(f"Error in execution task: {str(e)}", exc_info=True)
+                                    
+                                    # Send final event and close connection
+                                    yield f"data: {json.dumps({'type': 'stream_end', 'task_id': root_task_id}, ensure_ascii=False)}\n\n"
+                                    break
+                            
+                            # Wait before checking again
+                            await asyncio.sleep(check_interval)
+                            wait_time += check_interval
+                            
+                            # Send keepalive comment every 30 seconds
+                            if int(wait_time) % 30 == 0:
+                                yield ": keepalive\n\n"
+                        
+                        # If we've exceeded max wait time, send timeout event
+                        if wait_time >= max_wait_time:
+                            yield f"data: {json.dumps({'type': 'timeout', 'task_id': root_task_id, 'message': 'Stream timeout'}, ensure_ascii=False)}\n\n"
+                        
+                        # Clean up
+                        await streaming_context.close()
+                        
+                    except asyncio.CancelledError:
+                        # Client disconnected
+                        logger.debug(f"SSE connection closed for task {root_task_id}")
+                        await streaming_context.close()
+                        raise
+                    except Exception as e:
+                        logger.error(f"Error in SSE stream for task {root_task_id}: {str(e)}", exc_info=True)
+                        error_data = json.dumps({
+                            "type": "error",
+                            "task_id": root_task_id,
+                            "error": str(e)
+                        }, ensure_ascii=False)
+                        yield f"data: {error_data}\n\n"
+                        await streaming_context.close()
+                
+                return StreamingResponse(
+                    sse_event_generator(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",  # Disable buffering in nginx
                     }
-                    
-                    if webhook_config:
-                        response["message"] = (
-                            f"Task {task_id} execution started with webhook callbacks. "
-                            f"Updates will be sent to {webhook_config.get('url')}"
-                        )
-                        response["webhook_url"] = webhook_config.get("url")
-                    else:
-                        response["message"] = (
-                            f"Task {task_id} execution started with streaming. "
-                            f"Listen to /events?task_id={root_task_id} for updates."
-                        )
-                        response["events_url"] = f"/events?task_id={root_task_id}"
-                    
-                    return response
-                finally:
-                    # Close streaming context after execution completes
-                    await streaming_context.close()
-            else:
-                # Non-streaming mode: execute in background and return immediately
-                # Task execution happens asynchronously, similar to streaming mode
+                )
+            
+            elif streaming_context:
+                # Response mode 2: Regular POST with webhook callbacks (use_streaming=False, webhook_config provided)
+                # Execute with streaming context for webhook callbacks, return JSON response immediately
+                # Execution needs use_streaming=True for webhook callbacks (implementation detail)
                 asyncio.create_task(
                     task_executor.execute_task_tree(
                         task_tree=task_tree,
                         root_task_id=root_task_id,
-                        use_streaming=False,
+                        use_streaming=True,  # Need streaming for webhook callbacks (底层实现)
+                        streaming_callbacks_context=streaming_context,
+                        db_session=db_session
+                    )
+                )
+                
+                logger.info(f"Task {task_id} execution started with webhook callbacks (root: {root_task_id})")
+                
+                return {
+                    "success": True,
+                    "protocol": "jsonrpc",
+                    "root_task_id": root_task_id,
+                    "task_id": task_id,
+                    "status": "started",
+                    "streaming": True,  # Indicates webhook callbacks are active
+                    "message": (
+                        f"Task {task_id} execution started with webhook callbacks. "
+                        f"Updates will be sent to {webhook_config.get('url')}"
+                    ),
+                    "webhook_url": webhook_config.get("url")
+                }
+            
+            else:
+                # Response mode 2: Regular POST without webhook (use_streaming=False, no webhook_config)
+                # Execute in background, return JSON response immediately
+                # No webhook, no SSE - just fire and forget
+                asyncio.create_task(
+                    task_executor.execute_task_tree(
+                        task_tree=task_tree,
+                        root_task_id=root_task_id,
+                        use_streaming=False,  # No streaming needed
                         streaming_callbacks_context=None,
                         db_session=db_session
                     )

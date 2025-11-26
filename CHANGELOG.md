@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Streaming Mode for JSON-RPC**
   - Streaming mode support for `tasks.execute` endpoint via `use_streaming` parameter
-  - Real-time progress updates via Server-Sent Events (SSE) at `/events?task_id={root_task_id}`
+  - Real-time progress updates via Server-Sent Events (SSE) - returns `StreamingResponse` directly when `use_streaming=true`
   - `TaskStreamingContext` class for in-memory event storage
   - Consistent behavior with A2A Protocol streaming mode
   - Asynchronous task execution with immediate response
@@ -88,20 +88,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Development mode: `AIPARTNERUPFLOW_CORS_ALLOW_ALL=true` to allow all origins
   - Supports credentials, all HTTP methods, and all headers
 
+- **API Architecture Refactoring**
+  - Moved documentation routes (`/docs`, `/openapi.json`) to `api/routes/docs.py` for better code organization
+  - Consolidated OpenAPI schema generation logic into `DocsRoutes` class
+  - Improved separation of concerns: route handlers in `api/routes/`, documentation tools in `api/docs/`
+  - All custom routes (tasks, system, docs) are now defined in a unified structure
+
+- **SSE Streaming Simplification**
+  - SSE streaming is now handled directly by `tasks.execute` with `use_streaming=true`
+  - When `use_streaming=true`, `tasks.execute` returns a `StreamingResponse` with Server-Sent Events
+  - Simplified API design: one endpoint (`tasks.execute`) handles both regular POST and SSE streaming modes
+  - Webhook callbacks remain independent and can be used with either response mode
+
 ### Fixed
 - **Test Infrastructure**
   - Consolidated database session management in `conftest.py` with global `use_test_db_session` fixture
   - All tests now use isolated in-memory DuckDB databases to prevent data pollution
   - Removed dependency on persistent database files for testing
   - Improved test isolation and reliability
+  - Fixed `test_webhook_config_validation` test by using `patch.object()` for TaskTracker singleton
+  - Updated `test_jsonrpc_tasks_execute_with_streaming` to correctly parse SSE stream responses
+  - Added comprehensive test coverage for documentation routes (`/docs` and `/openapi.json`) with 14 test cases
 
-- **Documentation Corrections**
 - **Documentation Corrections**
   - Fixed incorrect command examples in README.md and docs:
     - Corrected `run my_batch` to proper `run flow --tasks` or `run flow executor_id` format
     - Corrected `run flow example_flow` to proper executor ID format
     - Removed non-existent `list-flows` command from documentation
   - Ensured all command examples in documentation are accurate and testable
+  - Updated SSE streaming documentation to reflect direct integration with `tasks.execute`
 
 ## [0.2.0] - 2025-11-21
 
