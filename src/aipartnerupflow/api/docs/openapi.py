@@ -9,12 +9,12 @@ from typing import Optional, Dict, Any
 
 def generate_openapi_schema(
     base_url: str = "http://localhost:8000",
-    title: str = "aipartnerupflow API",
+    title: str = "AIPartnerUpFlow API",
     version: str = "0.2.0",
     description: str = "Agent workflow orchestration and execution platform API",
 ) -> Dict[str, Any]:
     """
-    Generate OpenAPI 3.0 schema for aipartnerupflow API
+    Generate OpenAPI 3.0 schema for AIPartnerUpFlow API
     
     Args:
         base_url: Base URL of the API server
@@ -33,8 +33,8 @@ def generate_openapi_schema(
             "version": version,
             "description": description,
             "contact": {
-                "name": "aipartnerup",
-                "url": "https://github.com/aipartnerup/aipartnerupflow",
+                "name": "aipartnerupflow",
+                "url": "https://flow.aipartnerup.com",
             },
         },
         "servers": [
@@ -296,6 +296,67 @@ def generate_openapi_schema(
                                             },
                                             "id": "cancel-request-1",
                                         },
+                                    },
+                                    "executeTask": {
+                                        "summary": "Execute Task",
+                                        "value": {
+                                            "jsonrpc": "2.0",
+                                            "method": "tasks.execute",
+                                            "params": {
+                                                "task_id": "task-abc-123"
+                                            },
+                                            "id": "execute-request-1"
+                                        }
+                                    },
+                                    "executeTaskWithStreaming": {
+                                        "summary": "Execute Task with SSE Streaming",
+                                        "value": {
+                                            "jsonrpc": "2.0",
+                                            "method": "tasks.execute",
+                                            "params": {
+                                                "task_id": "task-abc-123",
+                                                "use_streaming": True
+                                            },
+                                            "id": "execute-streaming-request-1"
+                                        }
+                                    },
+                                    "executeTaskWithWebhook": {
+                                        "summary": "Execute Task with Webhook Callback",
+                                        "value": {
+                                            "jsonrpc": "2.0",
+                                            "method": "tasks.execute",
+                                            "params": {
+                                                "task_id": "task-abc-123",
+                                                "webhook_config": {
+                                                    "url": "https://your-server.com/callback",
+                                                    "headers": {
+                                                        "Authorization": "Bearer your-token"
+                                                    },
+                                                    "method": "POST",
+                                                    "timeout": 30.0,
+                                                    "max_retries": 3
+                                                }
+                                            },
+                                            "id": "execute-webhook-request-1"
+                                        }
+                                    },
+                                    "executeTaskWithStreamingAndWebhook": {
+                                        "summary": "Execute Task with SSE Streaming and Webhook",
+                                        "value": {
+                                            "jsonrpc": "2.0",
+                                            "method": "tasks.execute",
+                                            "params": {
+                                                "task_id": "task-abc-123",
+                                                "use_streaming": True,
+                                                "webhook_config": {
+                                                    "url": "https://your-server.com/callback",
+                                                    "headers": {
+                                                        "Authorization": "Bearer your-token"
+                                                    }
+                                                }
+                                            },
+                                            "id": "execute-combined-request-1"
+                                        }
                                     },
                                 },
                             }

@@ -11,8 +11,8 @@ from starlette.responses import HTMLResponse, JSONResponse
 def get_swagger_ui_html(
     openapi_url: str = "/openapi.json",
     title: str = "aipartnerupflow API Documentation",
-    swagger_js_url: str = "https://unpkg.com/swagger-ui-dist@5.9.0/swagger-ui-bundle.js",
-    swagger_css_url: str = "https://unpkg.com/swagger-ui-dist@5.9.0/swagger-ui.css",
+    swagger_js_url: str = "https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js",
+    swagger_css_url: str = "https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css",
 ) -> str:
     """
     Generate Swagger UI HTML page
@@ -66,7 +66,6 @@ def get_swagger_ui_html(
                 plugins: [
                     SwaggerUIBundle.plugins.DownloadUrl
                 ],
-                layout: "StandaloneLayout",
                 tryItOutEnabled: true,
                 requestInterceptor: function(request) {{
                     // Add any custom request interceptors here
