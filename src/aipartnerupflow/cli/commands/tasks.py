@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional, List, Coroutine, Any
 from aipartnerupflow.core.execution.task_executor import TaskExecutor
 from aipartnerupflow.core.utils.logger import get_logger
+from aipartnerupflow.core.utils.helpers import tree_node_to_dict
 from rich.console import Console
 from rich.table import Table
 from rich.live import Live
@@ -413,13 +414,6 @@ def copy(
         new_tree = run_async_safe(copy_task())
         
         # Convert task tree to dictionary format
-        def tree_node_to_dict(node):
-            """Convert TaskTreeNode to dictionary"""
-            task_dict = node.task.to_dict()
-            if node.children:
-                task_dict["children"] = [tree_node_to_dict(child) for child in node.children]
-            return task_dict
-        
         result = tree_node_to_dict(new_tree)
         
         # Output result

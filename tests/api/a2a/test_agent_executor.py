@@ -195,32 +195,6 @@ class TestAgentExecutor:
         assert executor._should_use_streaming_mode(context) is False
     
     @pytest.mark.asyncio
-    async def test_should_use_callback(self, executor):
-        """Test callback detection"""
-        # Test with push notification config (needs url attribute)
-        context = Mock()
-        push_config = Mock()
-        push_config.url = "https://example.com/callback"
-        context.configuration = Mock()
-        context.configuration.push_notification_config = push_config
-        
-        assert executor._should_use_callback(context) is True
-        
-        # Test with metadata.use_callback (backward compatibility)
-        context = Mock()
-        context.configuration = None
-        context.metadata = {"use_callback": True}
-        
-        assert executor._should_use_callback(context) is True
-        
-        # Test without push notification config
-        context = Mock()
-        context.configuration = None
-        context.metadata = {}
-        
-        assert executor._should_use_callback(context) is False
-    
-    @pytest.mark.asyncio
     async def test_execute_simple_mode(self, executor, mock_event_queue):
         """Test simple mode execution"""
         tasks = [

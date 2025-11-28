@@ -5,9 +5,13 @@ This module provides the base class and shared utilities that can be used
 by any protocol implementation (A2A, REST, etc.).
 """
 
-from typing import Optional, Callable, Type, Tuple
+from typing import Optional, Callable, Type, Tuple, Union
 from starlette.requests import Request
+from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from aipartnerupflow.core.storage.sqlalchemy.models import TaskModel
+from aipartnerupflow.core.storage.sqlalchemy.task_repository import TaskRepository
+from aipartnerupflow.core.storage import get_default_session
 from aipartnerupflow.core.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -146,4 +150,24 @@ class BaseRouteHandler:
                 f"Permission denied: User {authenticated_user_id} can only {operation} their own resources, "
                 f"not user {target_user_id}'s resources"
             )
+    
+    def _get_task_repository(
+        self,
+        db_session: Optional[Union[Session, AsyncSession]] = None
+    ) -> TaskRepository:
+        """
+        Create a TaskRepository instance with the configured task_model_class
+        
+        This helper method extracts the repeated pattern of creating TaskRepository
+        instances with the correct task_model_class configuration.
+        
+        Args:
+            db_session: Optional database session. If not provided, uses get_default_session()
+            
+        Returns:
+            TaskRepository instance configured with self.task_model_class
+        """
+        if db_session is None:
+            db_session = get_default_session()
+        return TaskRepository(db_session, task_model_class=self.task_model_class)
 

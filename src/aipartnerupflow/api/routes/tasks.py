@@ -19,6 +19,7 @@ from aipartnerupflow.core.storage import get_default_session
 from aipartnerupflow.core.storage.sqlalchemy.task_repository import TaskRepository
 from aipartnerupflow.core.execution.task_creator import TaskCreator
 from aipartnerupflow.core.utils.logger import get_logger
+from aipartnerupflow.core.utils.helpers import tree_node_to_dict
 
 logger = get_logger(__name__)
 
@@ -457,7 +458,7 @@ class TaskRoutes(BaseRouteHandler):
             
             # Get database session and create repository
             db_session = get_default_session()
-            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            task_repository = self._get_task_repository(db_session)
             
             task = await task_repository.get_task_by_id(task_id)
             
@@ -496,7 +497,7 @@ class TaskRoutes(BaseRouteHandler):
             
             # Get database session and create repository
             db_session = get_default_session()
-            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            task_repository = self._get_task_repository(db_session)
             
             # Get task
             task = await task_repository.get_task_by_id(task_id)
@@ -513,13 +514,6 @@ class TaskRoutes(BaseRouteHandler):
             task_tree_node = await task_repository.build_task_tree(root_task)
             
             # Convert TaskTreeNode to dictionary format
-            def tree_node_to_dict(node):
-                """Convert TaskTreeNode to dictionary"""
-                task_dict = node.task.to_dict()
-                if node.children:
-                    task_dict["children"] = [tree_node_to_dict(child) for child in node.children]
-                return task_dict
-            
             return tree_node_to_dict(task_tree_node)
             
         except Exception as e:
@@ -566,7 +560,7 @@ class TaskRoutes(BaseRouteHandler):
             
             # Get database session and create repository to fetch task details
             db_session = get_default_session()
-            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            task_repository = self._get_task_repository(db_session)
             
             # Fetch task details for running tasks
             tasks = []
@@ -632,7 +626,7 @@ class TaskRoutes(BaseRouteHandler):
             
             # Get database session and create repository
             db_session = get_default_session()
-            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            task_repository = self._get_task_repository(db_session)
             
             # Query tasks with filters
             # If root_only is True, set parent_id to "" to filter for root tasks (parent_id is None)
@@ -698,7 +692,7 @@ class TaskRoutes(BaseRouteHandler):
             
             # Get database session and create repository
             db_session = get_default_session()
-            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            task_repository = self._get_task_repository(db_session)
             
             # Get parent task to check permission
             parent_task = await task_repository.get_task_by_id(parent_id)
@@ -759,7 +753,7 @@ class TaskRoutes(BaseRouteHandler):
             
             # Get database session and create repository
             db_session = get_default_session()
-            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            task_repository = self._get_task_repository(db_session)
             
             statuses = []
             for task_id in task_ids:
@@ -871,7 +865,7 @@ class TaskRoutes(BaseRouteHandler):
                 
                 # Get database session to check user_id
                 db_session = get_default_session()
-                task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+                task_repository = self._get_task_repository(db_session)
                 
                 count = 0
                 for task_id in running_task_ids:
@@ -942,7 +936,7 @@ class TaskRoutes(BaseRouteHandler):
             
             # Get database session for permission checking
             db_session = get_default_session()
-            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            task_repository = self._get_task_repository(db_session)
             
             results = []
             for task_id in task_ids:
@@ -1100,13 +1094,6 @@ class TaskRoutes(BaseRouteHandler):
             )
             
             # Convert task tree to dictionary format for response
-            def tree_node_to_dict(node):
-                """Convert TaskTreeNode to dictionary"""
-                task_dict = node.task.to_dict()
-                if node.children:
-                    task_dict["children"] = [tree_node_to_dict(child) for child in node.children]
-                return task_dict
-            
             result = tree_node_to_dict(task_tree)
             
             logger.info(f"Created task tree: root task {task_tree.task.name} "
@@ -1131,7 +1118,7 @@ class TaskRoutes(BaseRouteHandler):
             
             # Get database session and create repository with custom TaskModel
             db_session = get_default_session()
-            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            task_repository = self._get_task_repository(db_session)
             
             task = await task_repository.get_task_by_id(task_id)
             
@@ -1161,7 +1148,7 @@ class TaskRoutes(BaseRouteHandler):
             
             # Get database session and create repository with custom TaskModel
             db_session = get_default_session()
-            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            task_repository = self._get_task_repository(db_session)
             
             # Get task first
             task = await task_repository.get_task_by_id(task_id)
@@ -1216,7 +1203,7 @@ class TaskRoutes(BaseRouteHandler):
             
             # Get database session and create repository with custom TaskModel
             db_session = get_default_session()
-            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            task_repository = self._get_task_repository(db_session)
             
             # Get task first to check if exists
             task = await task_repository.get_task_by_id(task_id)
@@ -1258,7 +1245,7 @@ class TaskRoutes(BaseRouteHandler):
             
             # Get database session and create repository with custom TaskModel
             db_session = get_default_session()
-            task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+            task_repository = self._get_task_repository(db_session)
             
             # Get original task
             original_task = await task_repository.get_task_by_id(task_id)
@@ -1274,13 +1261,6 @@ class TaskRoutes(BaseRouteHandler):
             new_tree = await task_creator.create_task_copy(original_task)
             
             # Convert task tree to dictionary format for response
-            def tree_node_to_dict(node):
-                """Convert TaskTreeNode to dictionary"""
-                task_dict = node.task.to_dict()
-                if node.children:
-                    task_dict["children"] = [tree_node_to_dict(child) for child in node.children]
-                return task_dict
-            
             result = tree_node_to_dict(new_tree)
             
             logger.info(f"Copied task {task_id} to new task {new_tree.task.id}")
@@ -1383,7 +1363,7 @@ class TaskRoutes(BaseRouteHandler):
             if execution_mode == "task_id":
                 # Mode 1: Execute by task_id using execute_task_by_id()
                 # Get task to check permission and get root_task_id
-                task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)
+                task_repository = self._get_task_repository(db_session)
                 task = await task_repository.get_task_by_id(task_id)
                 if not task:
                     raise ValueError(f"Task {task_id} not found")

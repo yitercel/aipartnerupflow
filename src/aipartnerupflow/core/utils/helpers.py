@@ -288,6 +288,34 @@ def validate_url(url: str|HttpUrl, url_name: str = 'URL'):
     return parsed
 
 
+def tree_node_to_dict(node) -> Dict[str, Any]:
+    """
+    Convert TaskTreeNode to dictionary format recursively
+    
+    This utility function converts a TaskTreeNode (which represents a task tree structure)
+    into a nested dictionary format suitable for JSON serialization and API responses.
+    
+    Args:
+        node: TaskTreeNode instance to convert
+        
+    Returns:
+        Dictionary representation of the task tree with nested children
+        
+    Example:
+        from aipartnerupflow.core.types import TaskTreeNode
+        from aipartnerupflow.core.utils.helpers import tree_node_to_dict
+        
+        # Convert task tree to dict
+        task_dict = tree_node_to_dict(task_tree_node)
+    """
+    from aipartnerupflow.core.types import TaskTreeNode
+    
+    task_dict = node.task.to_dict()
+    if node.children:
+        task_dict["children"] = [tree_node_to_dict(child) for child in node.children]
+    return task_dict
+
+
 def normalize_input_schema(input_schema: Dict[str, Any]) -> Dict[str, Any]:
     """
     Convert simplified input_schema format to standard JSON Schema format

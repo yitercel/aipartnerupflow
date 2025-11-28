@@ -7,16 +7,12 @@ from a2a.server.events import EventQueue
 from a2a.utils import new_agent_text_message, new_agent_parts_message
 from a2a.types import DataPart, Task, Artifact, Part
 from a2a.types import TaskStatusUpdateEvent, TaskStatus, TaskState
-import asyncio
-import json
 import uuid
-from typing import Dict, Any, Optional, List, Type
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
 
 from aipartnerupflow.core.execution.task_executor import TaskExecutor
-from aipartnerupflow.core.types import TaskTreeNode
 from aipartnerupflow.core.storage import get_default_session
-from aipartnerupflow.core.storage.sqlalchemy.models import TaskModel
 from aipartnerupflow.core.config import get_task_model_class
 from aipartnerupflow.api.a2a.event_queue_bridge import EventQueueBridge
 from aipartnerupflow.core.utils.logger import get_logger
@@ -123,30 +119,6 @@ class AIPartnerUpFlowAgentExecutor(AgentExecutor):
         logger.debug("Using simple mode")
         return False
     
-    def _should_use_callback(self, context: RequestContext) -> bool:
-        """
-        Check if callback mode should be used
-        
-        Callback mode is determined by configuration.push_notification_config
-        
-        Args:
-            context: Request context
-            
-        Returns:
-            True if callback mode should be used
-        """
-        if context.configuration and hasattr(context.configuration, "push_notification_config"):
-            config = context.configuration.push_notification_config
-            if config and hasattr(config, "url"):
-                logger.debug("Using callback mode from configuration.push_notification_config")
-                return True
-        
-        # Also check if metadata has use_callback flag (backward compatibility)
-        if context.metadata and context.metadata.get("use_callback") is True:
-            logger.debug("Using callback mode from metadata.use_callback")
-            return True
-        
-        return False
     async def _execute_simple_mode(
         self,
         context: RequestContext,
@@ -427,35 +399,6 @@ class AIPartnerUpFlowAgentExecutor(AgentExecutor):
             return part.data
         
         return None
-    
-    def _extract_data_from_parts(self, parts) -> Dict[str, Any]:
-        """
-        Extract structured data from DataPart in message parts (legacy method)
-        
-        Note: For tasks extraction, use _extract_tasks_from_context instead
-        """
-        if not parts:
-            logger.warning("No parts found")
-            return {}
-        
-        try:
-            parts_len = len(parts)
-            logger.debug(f"Processing {parts_len} parts")
-        except (TypeError, AttributeError):
-            logger.warning("Parts object doesn't support len(), treating as empty")
-            return {}
-
-        extracted_data = {}
-        for i, part in enumerate(parts):
-            part_data = self._extract_single_part_data(part)
-            if part_data:
-                if isinstance(part_data, dict):
-                    extracted_data.update(part_data)
-                else:
-                    extracted_data["raw_data"] = part_data
-        
-        logger.debug(f"Final extracted_data: {extracted_data}")
-        return extracted_data
 
     async def _send_error_update(
         self,
@@ -481,16 +424,6 @@ class AIPartnerUpFlowAgentExecutor(AgentExecutor):
             final=True
         )
         await event_queue.enqueue_event(status_update)
-
-    def _create_json_response(self, result: Dict[str, Any]) -> Any:
-        """Create a JSON response using DataPart"""
-        try:
-            data_part = DataPart(data=result)
-            response_message = new_agent_parts_message([data_part])
-            return response_message
-        except Exception as e:
-            logger.error(f"Failed to create DataPart response: {str(e)}")
-            return new_agent_text_message(json.dumps(result, indent=2))
 
     async def cancel(
         self,
