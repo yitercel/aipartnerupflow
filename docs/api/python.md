@@ -206,13 +206,26 @@ Database operations for tasks.
 - `get_task_by_id(task_id)`: Get task by ID
 - `get_root_task(task)`: Get root task
 - `build_task_tree(task)`: Build task tree from task
-- `update_task(task_id, ...)`: Update task
+- `update_task_status(task_id, status, ...)`: Update task status and related fields (error, result, progress, timestamps)
+- `update_task_inputs(task_id, inputs)`: Update task inputs
+- `update_task_dependencies(task_id, dependencies)`: Update task dependencies (with validation)
+- `update_task_name(task_id, name)`: Update task name
+- `update_task_priority(task_id, priority)`: Update task priority
+- `update_task_params(task_id, params)`: Update executor parameters
+- `update_task_schemas(task_id, schemas)`: Update validation schemas
 - `delete_task(task_id)`: Physically delete a task from the database
 - `get_all_children_recursive(task_id)`: Recursively get all child tasks (including grandchildren)
 - `find_dependent_tasks(task_id)`: Find all tasks that depend on a given task (reverse dependencies)
 - `list_tasks(...)`: List tasks with filters
 
 **See**: `src/aipartnerupflow/core/storage/sqlalchemy/task_repository.py` for all methods and `tests/core/storage/sqlalchemy/test_task_repository.py` for examples.
+
+**Note on Task Updates:**
+- Critical fields (`parent_id`, `user_id`, `dependencies`) are validated strictly:
+  - `parent_id` and `user_id`: Cannot be updated (always rejected)
+  - `dependencies`: Can only be updated for `pending` tasks, with validation for references, circular dependencies, and executing dependents
+- Other fields can be updated freely from any task status
+- For API-level updates with validation, use the `tasks.update` JSON-RPC endpoint via `TaskRoutes.handle_task_update()`
 
 **Note on Task Deletion:**
 - `delete_task()` performs physical deletion (not soft-delete)

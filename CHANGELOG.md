@@ -46,6 +46,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `delete_task()`: Physically delete a task from the database
   - Comprehensive test coverage with 16 test cases covering all scenarios
 
+- **Enhanced Task Update with Critical Field Validation**
+  - Critical field protection: Three critical fields (`parent_id`, `user_id`, `dependencies`) are now strictly validated to prevent fatal errors
+  - `parent_id` and `user_id`: Always rejected - these fields cannot be modified after task creation (task hierarchy and ownership are fixed)
+  - `dependencies`: Conditional validation with four critical checks:
+    1. Status check: Can only be updated when task is in `pending` status
+    2. Reference validation: All dependency references must exist in the same task tree
+    3. Circular dependency detection: Uses DFS algorithm to detect and prevent circular dependencies
+    4. Execution check: Prevents updates if any dependent tasks are currently executing
+  - Other fields: Can be updated freely without status restrictions (inputs, name, priority, params, schemas, status, result, error, progress, timestamps)
+  - Comprehensive error reporting: All validation errors are collected and returned in a single response
+  - New TaskRepository methods:
+    - `update_task_dependencies()`: Update task dependencies with validation
+    - `update_task_name()`: Update task name
+    - `update_task_priority()`: Update task priority
+    - `update_task_params()`: Update executor parameters
+    - `update_task_schemas()`: Update validation schemas
+  - New utility module: `dependency_validator.py` with reusable validation functions
+  - Comprehensive test coverage with 23 test cases covering all validation scenarios
+
 
 ## [0.3.0] - 2025-11-30
 

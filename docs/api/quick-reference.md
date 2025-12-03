@@ -71,12 +71,43 @@ task = await task_manager.task_repository.get_task_by_id(task_id)
 ### Update Task
 
 ```python
-task = await task_manager.task_repository.update_task(
+# Update status and related fields
+await task_repository.update_task_status(
     task_id,
     status="completed",
-    result={"data": "result"}
+    result={"data": "result"},
+    progress=1.0
+)
+
+# Update inputs
+await task_repository.update_task_inputs(task_id, {"key": "new_value"})
+
+# Update name
+await task_repository.update_task_name(task_id, "New Task Name")
+
+# Update priority
+await task_repository.update_task_priority(task_id, 2)
+
+# Update params
+await task_repository.update_task_params(task_id, {"executor_id": "new_executor"})
+
+# Update schemas
+await task_repository.update_task_schemas(task_id, {"input_schema": {...}})
+
+# Update dependencies (only for pending tasks, with validation)
+await task_repository.update_task_dependencies(
+    task_id,
+    [{"id": "dep-task-id", "required": True}]
 )
 ```
+
+**Critical Field Validation:**
+- `parent_id` and `user_id`: Cannot be updated (always rejected)
+- `dependencies`: Can only be updated for `pending` tasks, with validation:
+  - All dependency references must exist in the same task tree
+  - No circular dependencies allowed
+  - No dependent tasks can be executing
+- Other fields: Can be updated freely from any status
 
 ### Delete Task
 

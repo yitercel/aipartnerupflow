@@ -1140,7 +1140,12 @@ class TaskRoutes(BaseRouteHandler):
         request: Request,
         request_id: str
     ) -> dict:
-        """Handle task update"""
+        """
+        Handle task update with critical field validation
+        
+        Critical fields (parent_id, user_id, dependencies) are validated strictly.
+        All other fields can be updated freely without status restrictions.
+        """
         try:
             task_id = params.get("task_id")
             if not task_id:
@@ -1158,10 +1163,32 @@ class TaskRoutes(BaseRouteHandler):
             # Check permission to update this task
             self._check_permission(request, task.user_id, "update")
             
-            # Update status if provided
+            # Collect validation errors
+            validation_errors = []
+            
+            # Validate critical fields and collect errors
+            for field_name, field_value in params.items():
+                if field_name == "task_id":
+                    continue  # Skip task_id, it's not a field to update
+                
+                # Validate critical fields
+                error = await self._validate_critical_field(
+                    task, field_name, field_value, task_repository
+                )
+                if error:
+                    validation_errors.append(error)
+            
+            # If there are validation errors, raise exception with all errors
+            if validation_errors:
+                error_message = "Update failed:\n" + "\n".join(f"- {err}" for err in validation_errors)
+                raise ValueError(error_message)
+            
+            # Apply updates for all fields
+            from datetime import datetime, timezone
+            
+            # Update status and related fields if provided
             status = params.get("status")
-            if status:
-                from datetime import datetime, timezone
+            if status is not None:
                 await task_repository.update_task_status(
                     task_id=task_id,
                     status=status,
@@ -1171,11 +1198,57 @@ class TaskRoutes(BaseRouteHandler):
                     started_at=params.get("started_at"),
                     completed_at=params.get("completed_at"),
                 )
+            else:
+                # Update individual status-related fields if status is not provided
+                if "error" in params:
+                    await task_repository.update_task_status(
+                        task_id=task_id,
+                        status=task.status,
+                        error=params.get("error")
+                    )
+                if "result" in params:
+                    await task_repository.update_task_status(
+                        task_id=task_id,
+                        status=task.status,
+                        result=params.get("result")
+                    )
+                if "progress" in params:
+                    await task_repository.update_task_status(
+                        task_id=task_id,
+                        status=task.status,
+                        progress=params.get("progress")
+                    )
+                if "started_at" in params:
+                    await task_repository.update_task_status(
+                        task_id=task_id,
+                        status=task.status,
+                        started_at=params.get("started_at")
+                    )
+                if "completed_at" in params:
+                    await task_repository.update_task_status(
+                        task_id=task_id,
+                        status=task.status,
+                        completed_at=params.get("completed_at")
+                    )
             
-            # Update inputs if provided
-            inputs = params.get("inputs")
-            if inputs is not None:
-                await task_repository.update_task_inputs(task_id, inputs)
+            # Update other fields
+            if "inputs" in params:
+                await task_repository.update_task_inputs(task_id, params["inputs"])
+            
+            if "dependencies" in params:
+                await task_repository.update_task_dependencies(task_id, params["dependencies"])
+            
+            if "name" in params:
+                await task_repository.update_task_name(task_id, params["name"])
+            
+            if "priority" in params:
+                await task_repository.update_task_priority(task_id, params["priority"])
+            
+            if "params" in params:
+                await task_repository.update_task_params(task_id, params["params"])
+            
+            if "schemas" in params:
+                await task_repository.update_task_schemas(task_id, params["schemas"])
             
             # Refresh task to get updated values
             updated_task = await task_repository.get_task_by_id(task_id)
@@ -1185,9 +1258,108 @@ class TaskRoutes(BaseRouteHandler):
             logger.info(f"Updated task {task_id}")
             return updated_task.to_dict()
             
+        except ValueError:
+            # Re-raise ValueError (validation errors) as-is
+            raise
         except Exception as e:
             logger.error(f"Error updating task: {str(e)}", exc_info=True)
             raise
+    
+    async def _validate_critical_field(
+        self,
+        task: Any,
+        field_name: str,
+        field_value: Any,
+        task_repository: TaskRepository
+    ) -> Optional[str]:
+        """
+        Validate critical fields that can cause fatal errors.
+        
+        Args:
+            task: TaskModel instance
+            field_name: Name of the field being updated
+            field_value: New value for the field
+            task_repository: TaskRepository instance
+            
+        Returns:
+            Error message string if validation fails, None if validation passes
+        """
+        # Critical field 1: parent_id - Always reject
+        if field_name == "parent_id":
+            return "Cannot update 'parent_id': field cannot be modified (task hierarchy is fixed)"
+        
+        # Critical field 2: user_id - Always reject
+        if field_name == "user_id":
+            return "Cannot update 'user_id': field cannot be modified (task ownership is fixed)"
+        
+        # Critical field 3: dependencies - Conditional validation
+        if field_name == "dependencies":
+            return await self._validate_dependency_update(task, field_value, task_repository)
+        
+        # All other fields - No validation needed
+        return None
+    
+    async def _validate_dependency_update(
+        self,
+        task: Any,
+        new_dependencies: Any,
+        task_repository: TaskRepository
+    ) -> Optional[str]:
+        """
+        Validate dependency update with critical checks.
+        
+        Args:
+            task: TaskModel instance being updated
+            new_dependencies: New dependencies list
+            task_repository: TaskRepository instance
+            
+        Returns:
+            Error message string if validation fails, None if validation passes
+        """
+        from aipartnerupflow.core.utils.dependency_validator import (
+            validate_dependency_references,
+            detect_circular_dependencies,
+            check_dependent_tasks_executing
+        )
+        
+        # Check 1: Task must be in pending status
+        if task.status != "pending":
+            return f"Cannot update 'dependencies': task status is '{task.status}' (must be 'pending')"
+        
+        # Validate dependencies is a list
+        if not isinstance(new_dependencies, list):
+            return f"Cannot update 'dependencies': must be a list, got {type(new_dependencies).__name__}"
+        
+        try:
+            # Check 2: Validate all dependency references exist in the same task tree
+            await validate_dependency_references(task.id, new_dependencies, task_repository)
+            
+            # Check 3: Detect circular dependencies
+            root_task = await task_repository.get_root_task(task)
+            all_tasks_in_tree = await task_repository.get_all_tasks_in_tree(root_task)
+            detect_circular_dependencies(
+                task.id,
+                new_dependencies,
+                all_tasks_in_tree
+            )
+            
+            # Check 4: Check if any dependent tasks are executing
+            executing_dependents = await check_dependent_tasks_executing(
+                task.id,
+                task_repository
+            )
+            if executing_dependents:
+                return (
+                    f"Cannot update dependencies: task '{task.id}' has dependent tasks "
+                    f"that are executing: {executing_dependents}"
+                )
+            
+        except ValueError as e:
+            # Return the validation error message
+            return str(e)
+        
+        # All validations passed
+        return None
     
     async def _get_all_children_recursive(
         self,

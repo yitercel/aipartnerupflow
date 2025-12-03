@@ -715,7 +715,7 @@ Retrieves a task by its ID. Returns the complete task object including all field
 ### `tasks.update`
 
 **Description:**  
-Updates task properties. This method allows partial updates to task fields such as status, progress, inputs, results, and timestamps. Only the fields provided in the request will be updated; other fields remain unchanged.
+Updates task properties with critical field validation. This method allows partial updates to task fields. Critical fields (`parent_id`, `user_id`, `dependencies`) are strictly validated to prevent fatal errors, while other fields can be updated freely without status restrictions.
 
 **Method:** `tasks.update`
 
@@ -723,11 +723,39 @@ Updates task properties. This method allows partial updates to task fields such 
 - `task_id` (string, required): Task ID to update
 - `status` (string, optional): New status ("pending", "in_progress", "completed", "failed", "cancelled")
 - `inputs` (object, optional): Updated input parameters (replaces entire inputs object)
+- `name` (string, optional): Updated task name
+- `priority` (integer, optional): Updated priority level
+- `params` (object, optional): Updated executor parameters
+- `schemas` (object, optional): Updated validation schemas
+- `dependencies` (array, optional): Updated dependencies list (see validation rules below)
 - `result` (object, optional): Updated result (replaces entire result object)
 - `error` (string, optional): Error message (typically set when status is "failed")
 - `progress` (float, optional): Progress value (0.0 to 1.0)
 - `started_at` (string, optional): Start timestamp (ISO 8601 format)
 - `completed_at` (string, optional): Completion timestamp (ISO 8601 format)
+
+**Critical Field Validation Rules:**
+
+1. **`parent_id`** - Always rejected
+   - Cannot be modified after task creation
+   - Error: "Cannot update 'parent_id': field cannot be modified (task hierarchy is fixed)"
+
+2. **`user_id`** - Always rejected
+   - Cannot be modified after task creation
+   - Error: "Cannot update 'user_id': field cannot be modified (task ownership is fixed)"
+
+3. **`dependencies`** - Conditional validation (only when updating)
+   - **Status check**: Task must be in `pending` status
+     - Error: "Cannot update 'dependencies': task status is '{status}' (must be 'pending')"
+   - **Reference validation**: All dependency IDs must exist in the same task tree
+     - Error: "Dependency reference '{dep_id}' not found in task tree"
+   - **Circular dependency detection**: Prevents circular dependencies using DFS algorithm
+     - Error: "Circular dependency detected: Task A -> Task B -> Task A"
+   - **Execution check**: Prevents updates if dependent tasks are executing
+     - Error: "Cannot update dependencies: task '{task_id}' has dependent tasks that are executing: ['task-456']"
+
+**Other Fields:**
+- All other fields (`inputs`, `name`, `priority`, `params`, `schemas`, `status`, `result`, `error`, `progress`, timestamps) can be updated freely without status restrictions.
 
 **Example Request:**
 ```json
@@ -763,14 +791,69 @@ Updates task properties. This method allows partial updates to task fields such 
 **Response Fields:**
 Returns the complete updated task object with all fields.
 
+**Example Request (Update Multiple Fields):**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tasks.update",
+  "params": {
+    "task_id": "task-abc-123",
+    "name": "Updated Task Name",
+    "priority": 3,
+    "inputs": {"new_key": "new_value"},
+    "status": "in_progress",
+    "progress": 0.5
+  },
+  "id": "update-request-2"
+}
+```
+
+**Example Request (Update Dependencies - Valid):**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tasks.update",
+  "params": {
+    "task_id": "task-abc-123",
+    "dependencies": [
+      {"id": "task-dep-1", "required": true},
+      {"id": "task-dep-2", "required": false}
+    ]
+  },
+  "id": "update-request-3"
+}
+```
+
+**Example Response (Error - Critical Field Validation):**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "update-request-4",
+  "error": {
+    "code": -32602,
+    "message": "Invalid params",
+    "data": "Update failed:\n- Cannot update 'parent_id': field cannot be modified (task hierarchy is fixed)\n- Cannot update 'dependencies': task status is 'completed' (must be 'pending')"
+  }
+}
+```
+
 **Error Cases:**
 - Task not found: Returns error with code -32602
 - Permission denied: Returns error with code -32001
-- Invalid status value: Returns error with code -32602
-- Invalid progress value (not 0.0-1.0): Returns error with code -32602
+- Critical field violation (`parent_id`, `user_id`): Returns error with detailed message
+- Dependencies validation failure: Returns error with specific validation failure reason:
+  - Task not in `pending` status
+  - Invalid dependency reference
+  - Circular dependency detected
+  - Dependent tasks are executing
+- Invalid field values: Returns error with code -32602
 
 **Notes:**
 - Updates are atomic and immediately persisted to the database
+- Critical fields (`parent_id`, `user_id`, `dependencies`) are validated strictly to prevent fatal errors
+- Other fields can be updated from any task status without restrictions
+- Dependencies can only be updated for `pending` tasks to ensure data integrity
+- All validation errors are collected and returned together in a single error message
 - Status changes may trigger dependent task execution
 - Timestamps should be in ISO 8601 format
 - Only authenticated users can update their own tasks (or admins can update any task)

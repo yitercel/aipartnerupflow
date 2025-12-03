@@ -387,6 +387,186 @@ class TaskRepository:
                 self.db.rollback()
             return False
     
+    async def update_task_dependencies(self, task_id: str, dependencies: List[Dict[str, Any]]) -> bool:
+        """
+        Update task dependencies
+        
+        Args:
+            task_id: Task ID
+            dependencies: New dependencies list
+            
+        Returns:
+            True if successful, False if task not found
+        """
+        try:
+            task = await self.get_task_by_id(task_id)
+            if not task:
+                return False
+            
+            task.dependencies = dependencies
+            
+            if self.is_async:
+                await self.db.commit()
+                await self.db.refresh(task)
+            else:
+                self.db.commit()
+                self.db.refresh(task)
+            
+            logger.debug(f"Updated dependencies for task {task_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating task dependencies for {task_id}: {str(e)}")
+            if self.is_async:
+                await self.db.rollback()
+            else:
+                self.db.rollback()
+            return False
+    
+    async def update_task_name(self, task_id: str, name: str) -> bool:
+        """
+        Update task name
+        
+        Args:
+            task_id: Task ID
+            name: New task name
+            
+        Returns:
+            True if successful, False if task not found
+        """
+        try:
+            task = await self.get_task_by_id(task_id)
+            if not task:
+                return False
+            
+            task.name = name
+            
+            if self.is_async:
+                await self.db.commit()
+                await self.db.refresh(task)
+            else:
+                self.db.commit()
+                self.db.refresh(task)
+            
+            logger.debug(f"Updated name for task {task_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating task name for {task_id}: {str(e)}")
+            if self.is_async:
+                await self.db.rollback()
+            else:
+                self.db.rollback()
+            return False
+    
+    async def update_task_priority(self, task_id: str, priority: int) -> bool:
+        """
+        Update task priority
+        
+        Args:
+            task_id: Task ID
+            priority: New priority level
+            
+        Returns:
+            True if successful, False if task not found
+        """
+        try:
+            task = await self.get_task_by_id(task_id)
+            if not task:
+                return False
+            
+            task.priority = priority
+            
+            if self.is_async:
+                await self.db.commit()
+                await self.db.refresh(task)
+            else:
+                self.db.commit()
+                self.db.refresh(task)
+            
+            logger.debug(f"Updated priority for task {task_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating task priority for {task_id}: {str(e)}")
+            if self.is_async:
+                await self.db.rollback()
+            else:
+                self.db.rollback()
+            return False
+    
+    async def update_task_params(self, task_id: str, params: Dict[str, Any]) -> bool:
+        """
+        Update task params
+        
+        Args:
+            task_id: Task ID
+            params: New executor parameters
+            
+        Returns:
+            True if successful, False if task not found
+        """
+        try:
+            task = await self.get_task_by_id(task_id)
+            if not task:
+                return False
+            
+            task.params = params
+            
+            if self.is_async:
+                await self.db.commit()
+                await self.db.refresh(task)
+            else:
+                self.db.commit()
+                self.db.refresh(task)
+            
+            logger.debug(f"Updated params for task {task_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating task params for {task_id}: {str(e)}")
+            if self.is_async:
+                await self.db.rollback()
+            else:
+                self.db.rollback()
+            return False
+    
+    async def update_task_schemas(self, task_id: str, schemas: Dict[str, Any]) -> bool:
+        """
+        Update task schemas
+        
+        Args:
+            task_id: Task ID
+            schemas: New validation schemas
+            
+        Returns:
+            True if successful, False if task not found
+        """
+        try:
+            task = await self.get_task_by_id(task_id)
+            if not task:
+                return False
+            
+            task.schemas = schemas
+            
+            if self.is_async:
+                await self.db.commit()
+                await self.db.refresh(task)
+            else:
+                self.db.commit()
+                self.db.refresh(task)
+            
+            logger.debug(f"Updated schemas for task {task_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating task schemas for {task_id}: {str(e)}")
+            if self.is_async:
+                await self.db.rollback()
+            else:
+                self.db.rollback()
+            return False
+    
     async def get_completed_tasks_by_ids(self, task_ids: List[str]) -> Dict[str, TaskModelType]:
         """
         Get completed tasks by a list of IDs
