@@ -778,7 +778,11 @@ Returns the complete updated task object with all fields.
 ### `tasks.delete`
 
 **Description:**  
-Deletes a task by marking it as deleted. The task is not physically removed from the database but its status is set to "deleted" and a completion timestamp is recorded. This allows for audit trails and potential recovery.
+Physically deletes a task from the database with comprehensive validation. The task and all its children are permanently removed if deletion conditions are met. Deletion is only allowed when:
+1. All tasks (the task itself + all children recursively) are in `pending` status
+2. No other tasks depend on the task being deleted
+
+If all conditions are met, the task and all its children are physically deleted. Otherwise, a detailed error message is returned explaining why deletion is not allowed.
 
 **Method:** `tasks.delete`
 
@@ -797,32 +801,86 @@ Deletes a task by marking it as deleted. The task is not physically removed from
 }
 ```
 
-**Example Response:**
+**Example Response (Success):**
 ```json
 {
   "jsonrpc": "2.0",
   "id": "delete-request-1",
   "result": {
     "success": true,
-    "task_id": "task-abc-123"
+    "task_id": "task-abc-123",
+    "deleted_count": 4,
+    "children_deleted": 3
   }
 }
 ```
 
-**Response Fields:**
+**Response Fields (Success):**
 - `success` (boolean): Whether deletion was successful
 - `task_id` (string): ID of the deleted task
+- `deleted_count` (integer): Total number of tasks deleted (including the main task and all children)
+- `children_deleted` (integer): Number of child tasks deleted
+
+**Example Response (Error - Non-pending Children):**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "delete-request-1",
+  "error": {
+    "code": -32602,
+    "message": "Invalid params",
+    "data": "Cannot delete task: task has 2 non-pending children: [child-1: in_progress, child-2: completed]"
+  }
+}
+```
+
+**Example Response (Error - Dependent Tasks):**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "delete-request-1",
+  "error": {
+    "code": -32602,
+    "message": "Invalid params",
+    "data": "Cannot delete task: 2 tasks depend on this task: [dependent-1, dependent-2]"
+  }
+}
+```
+
+**Example Response (Error - Mixed Conditions):**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "delete-request-1",
+  "error": {
+    "code": -32602,
+    "message": "Invalid params",
+    "data": "Cannot delete task: task has 1 non-pending children: [child-1: completed]; 1 tasks depend on this task: [dependent-1]"
+  }
+}
+```
 
 **Error Cases:**
 - Task not found: Returns error with code -32602
 - Permission denied: Returns error with code -32001
-- Task is currently running: Returns error with code -32602 (should cancel first)
+- Task has non-pending children: Returns error with code -32602, includes list of non-pending children with their statuses
+- Task itself is not pending: Returns error with code -32602, indicates current status
+- Other tasks depend on this task: Returns error with code -32602, includes list of dependent task IDs
+- Mixed conditions: Returns error with code -32602, includes all blocking conditions
+
+**Deletion Conditions:**
+- **All tasks must be pending**: The task itself and all its children (recursively) must be in `pending` status
+- **No dependencies**: No other tasks can depend on the task being deleted
+- **Recursive deletion**: When deletion is allowed, all child tasks (including grandchildren) are automatically deleted
 
 **Notes:**
-- Deleted tasks are soft-deleted (status set to "deleted")
-- Deleted tasks are excluded from normal queries
-- Child tasks are not automatically deleted
+- Tasks are **physically deleted** from the database (not soft-deleted)
+- Deletion is **atomic**: Either all tasks (task + children) are deleted, or none are deleted
+- Child tasks are automatically deleted when the parent task is deleted (if all are pending)
 - Deletion requires proper permissions (own task or admin role)
+- Error messages provide detailed information about why deletion failed
+- To delete a task with non-pending children, first cancel or complete those children
+- To delete a task with dependencies, first remove or update the dependent tasks
 
 ### `tasks.copy`
 

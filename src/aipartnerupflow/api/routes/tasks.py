@@ -8,7 +8,7 @@ This module provides task management handlers that can be used by any protocol
 import uuid
 import asyncio
 import time
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Dict, Any, List, Union, Tuple
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 import httpx
@@ -1189,19 +1189,78 @@ class TaskRoutes(BaseRouteHandler):
             logger.error(f"Error updating task: {str(e)}", exc_info=True)
             raise
     
+    async def _get_all_children_recursive(
+        self,
+        task_repository: TaskRepository,
+        task_id: str
+    ) -> List[Any]:
+        """
+        Get all children tasks recursively
+        
+        Args:
+            task_repository: TaskRepository instance
+            task_id: Parent task ID
+            
+        Returns:
+            List of all child tasks (including grandchildren, etc.)
+        """
+        return await task_repository.get_all_children_recursive(task_id)
+    
+    async def _find_dependent_tasks(
+        self,
+        task_repository: TaskRepository,
+        task_id: str
+    ) -> List[Any]:
+        """
+        Find all tasks that depend on the given task (reverse dependencies)
+        
+        Args:
+            task_repository: TaskRepository instance
+            task_id: Task ID to find dependents for
+            
+        Returns:
+            List of tasks that depend on the given task
+        """
+        return await task_repository.find_dependent_tasks(task_id)
+    
+    def _check_all_tasks_pending(self, tasks: List[Any]) -> Tuple[bool, List[Dict[str, str]]]:
+        """
+        Check if all tasks are pending
+        
+        Args:
+            tasks: List of task objects
+            
+        Returns:
+            Tuple of (all_pending: bool, non_pending_tasks: List[Dict[task_id, status]])
+        """
+        non_pending = []
+        for task in tasks:
+            if task.status != "pending":
+                non_pending.append({"task_id": task.id, "status": task.status})
+        
+        return len(non_pending) == 0, non_pending
+    
     async def handle_task_delete(
         self,
         params: dict,
         request: Request,
         request_id: str
     ) -> dict:
-        """Handle task deletion"""
+        """
+        Handle task deletion with validation
+        
+        Deletion conditions:
+        - If all tasks (task + all children) are pending: delete all physically
+        - Otherwise: check for non-pending children and dependencies, return detailed error
+        
+        Returns detailed error messages if deletion is not allowed.
+        """
         try:
             task_id = params.get("task_id")
             if not task_id:
                 raise ValueError("Task ID is required")
             
-            # Get database session and create repository with custom TaskModel
+            # Get database session and create repository
             db_session = get_default_session()
             task_repository = self._get_task_repository(db_session)
             
@@ -1213,20 +1272,84 @@ class TaskRoutes(BaseRouteHandler):
             # Check permission to delete this task
             self._check_permission(request, task.user_id, "delete")
             
-            # Delete task
-            # Note: TaskRepository doesn't have delete method yet, so we'll mark as deleted or remove
-            # For now, we'll update status to "deleted" (if we add that status)
-            # Or we can add a delete method to TaskRepository
-            from datetime import datetime, timezone
-            await task_repository.update_task_status(
-                task_id=task_id,
-                status="deleted",
-                completed_at=datetime.now(timezone.utc),
+            # Get all children recursively
+            all_children = await self._get_all_children_recursive(task_repository, task_id)
+            
+            # Collect all tasks to check (task itself + all children)
+            all_tasks_to_check = [task] + all_children
+            
+            # Check if all tasks are pending
+            all_pending, non_pending_tasks = self._check_all_tasks_pending(all_tasks_to_check)
+            
+            # Check for dependent tasks (always check, regardless of pending status)
+            dependent_tasks = await self._find_dependent_tasks(task_repository, task_id)
+            
+            # Build error message if deletion is not allowed
+            error_parts = []
+            
+            # Check for non-pending tasks
+            if not all_pending:
+                # Filter out the main task from non_pending_tasks to get only children
+                non_pending_children = [
+                    t for t in non_pending_tasks 
+                    if t["task_id"] != task_id
+                ]
+                
+                if non_pending_children:
+                    children_info = ", ".join(
+                        [f"{t['task_id']}: {t['status']}" for t in non_pending_children]
+                    )
+                    error_parts.append(
+                        f"task has {len(non_pending_children)} non-pending children: [{children_info}]"
+                    )
+                
+                # Also check if the main task itself is not pending
+                if any(t["task_id"] == task_id for t in non_pending_tasks):
+                    main_task_status = next(
+                        t["status"] for t in non_pending_tasks if t["task_id"] == task_id
+                    )
+                    error_parts.append(f"task status is '{main_task_status}' (must be 'pending')")
+            
+            # Check for dependent tasks
+            if dependent_tasks:
+                dependent_task_ids = [t.id for t in dependent_tasks]
+                error_parts.append(
+                    f"{len(dependent_tasks)} tasks depend on this task: [{', '.join(dependent_task_ids)}]"
+                )
+            
+            # If there are any errors, raise exception
+            if error_parts:
+                error_message = "Cannot delete task: " + "; ".join(error_parts)
+                raise ValueError(error_message)
+            
+            # All conditions met: all tasks are pending and no dependencies
+            # Delete all tasks (children first, then parent)
+            deleted_count = 0
+            for child in all_children:
+                success = await task_repository.delete_task(child.id)
+                if success:
+                    deleted_count += 1
+            
+            # Delete the main task
+            success = await task_repository.delete_task(task_id)
+            if success:
+                deleted_count += 1
+            
+            logger.info(
+                f"Deleted task {task_id} and {len(all_children)} children "
+                f"({deleted_count} total tasks deleted)"
             )
+            return {
+                "success": True,
+                "task_id": task_id,
+                "deleted_count": deleted_count,
+                "children_deleted": len(all_children)
+            }
             
-            logger.info(f"Deleted task {task_id}")
-            return {"success": True, "task_id": task_id}
-            
+        except ValueError as e:
+            # Re-raise ValueError with detailed error message
+            logger.warning(f"Task deletion failed: {str(e)}")
+            raise
         except Exception as e:
             logger.error(f"Error deleting task: {str(e)}", exc_info=True)
             raise

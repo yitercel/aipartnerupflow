@@ -207,10 +207,17 @@ Database operations for tasks.
 - `get_root_task(task)`: Get root task
 - `build_task_tree(task)`: Build task tree from task
 - `update_task(task_id, ...)`: Update task
-- `delete_task(task_id)`: Delete task
+- `delete_task(task_id)`: Physically delete a task from the database
+- `get_all_children_recursive(task_id)`: Recursively get all child tasks (including grandchildren)
+- `find_dependent_tasks(task_id)`: Find all tasks that depend on a given task (reverse dependencies)
 - `list_tasks(...)`: List tasks with filters
 
 **See**: `src/aipartnerupflow/core/storage/sqlalchemy/task_repository.py` for all methods and `tests/core/storage/sqlalchemy/test_task_repository.py` for examples.
+
+**Note on Task Deletion:**
+- `delete_task()` performs physical deletion (not soft-delete)
+- For API-level deletion with validation, use the `tasks.delete` JSON-RPC endpoint via `TaskRoutes.handle_task_delete()`
+- The API endpoint validates that all tasks (task + children) are pending and checks for dependencies before deletion
 
 ## TaskCreator
 

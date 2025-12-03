@@ -31,6 +31,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Response includes both `task_id` (copied task) and `original_task_id` (original task) when `copy_execution=True`
   - Combines `tasks.copy` and `tasks.execute` into a single API call for better user experience
 
+- **Enhanced Task Deletion with Validation**
+  - Physical deletion: Tasks are now physically removed from the database (not soft-deleted)
+  - Conditional deletion: Tasks can only be deleted if all tasks (task itself + all children) are in `pending` status
+  - Recursive child deletion: When deletion is allowed, all child tasks (including grandchildren) are automatically deleted
+  - Dependency validation: Deletion is prevented if other tasks depend on the task being deleted
+  - Detailed error messages: Returns specific error information when deletion fails:
+    - Lists non-pending children with their statuses
+    - Lists tasks that depend on the task being deleted
+    - Indicates if the task itself is not pending
+  - New TaskRepository methods:
+    - `get_all_children_recursive()`: Recursively get all child tasks
+    - `find_dependent_tasks()`: Find all tasks that depend on a given task (reverse dependencies)
+    - `delete_task()`: Physically delete a task from the database
+  - Comprehensive test coverage with 16 test cases covering all scenarios
+
 
 ## [0.3.0] - 2025-11-30
 

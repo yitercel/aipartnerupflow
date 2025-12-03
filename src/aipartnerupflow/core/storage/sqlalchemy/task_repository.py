@@ -7,7 +7,7 @@ for tasks. TaskManager should use TaskRepository instead of directly operating o
 
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from typing import List, Dict, Any, Optional, Union, TYPE_CHECKING, Type, TypeVar
 from datetime import datetime, timezone
 from aipartnerupflow.core.storage.sqlalchemy.models import TaskModel
@@ -574,6 +574,110 @@ class TaskRepository:
             # Recursively save grandchildren
             if child_node.children:
                 await self._save_children_recursive(child_node)
+    
+    async def get_all_children_recursive(self, task_id: str) -> List[TaskModelType]:
+        """
+        Get all children tasks recursively (including grandchildren, etc.)
+        
+        Args:
+            task_id: Parent task ID
+            
+        Returns:
+            List of all child TaskModel instances (or custom TaskModel subclass) recursively
+        """
+        all_children = []
+        
+        async def collect_children(parent_id: str):
+            children = await self.get_child_tasks_by_parent_id(parent_id)
+            for child in children:
+                all_children.append(child)
+                # Recursively collect grandchildren
+                await collect_children(child.id)
+        
+        await collect_children(task_id)
+        return all_children
+    
+    async def find_dependent_tasks(self, task_id: str) -> List[TaskModelType]:
+        """
+        Find all tasks that depend on the given task (reverse dependencies)
+        
+        This method searches for tasks that have the given task_id in their dependencies field.
+        
+        Args:
+            task_id: Task ID to find dependents for
+            
+        Returns:
+            List of TaskModel instances (or custom TaskModel subclass) that depend on the given task
+        """
+        try:
+            # Get all tasks from the database
+            # We need to check all tasks' dependencies field to find reverse dependencies
+            if self.is_async:
+                stmt = select(self.task_model_class)
+                result = await self.db.execute(stmt)
+                all_tasks = result.scalars().all()
+            else:
+                all_tasks = self.db.query(self.task_model_class).all()
+            
+            dependent_tasks = []
+            for task in all_tasks:
+                dependencies = task.dependencies or []
+                if not dependencies:
+                    continue
+                
+                # Check if this task depends on the given task_id
+                for dep in dependencies:
+                    dep_id = None
+                    if isinstance(dep, dict):
+                        dep_id = dep.get("id")
+                    elif isinstance(dep, str):
+                        dep_id = dep
+                    
+                    if dep_id == task_id:
+                        dependent_tasks.append(task)
+                        break  # Found dependency, no need to check other dependencies
+            
+            return dependent_tasks
+            
+        except Exception as e:
+            logger.error(f"Error finding dependent tasks for {task_id}: {str(e)}")
+            return []
+    
+    async def delete_task(self, task_id: str) -> bool:
+        """
+        Physically delete a task from the database
+        
+        Args:
+            task_id: Task ID to delete
+            
+        Returns:
+            True if successful, False if task not found
+        """
+        try:
+            task = await self.get_task_by_id(task_id)
+            if not task:
+                return False
+            
+            if self.is_async:
+                # For async session, use delete statement
+                stmt = delete(self.task_model_class).where(self.task_model_class.id == task_id)
+                await self.db.execute(stmt)
+                await self.db.commit()
+            else:
+                # For sync session, mark for deletion
+                self.db.delete(task)
+                self.db.commit()
+            
+            logger.debug(f"Physically deleted task {task_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error deleting task {task_id}: {str(e)}")
+            if self.is_async:
+                await self.db.rollback()
+            else:
+                self.db.rollback()
+            return False
 
 
 __all__ = [

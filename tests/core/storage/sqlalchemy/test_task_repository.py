@@ -264,4 +264,173 @@ class TestTaskRepository:
         
         assert task.project_id == "proj-123"
         assert isinstance(task, CustomTaskModel)
+    
+    @pytest.mark.asyncio
+    async def test_get_all_children_recursive(self, sync_db_session):
+        """Test recursively getting all children tasks"""
+        repo = TaskRepository(sync_db_session)
+        
+        # Create task tree: root -> child1, child2 -> grandchild1, grandchild2
+        root = await repo.create_task(
+            name="Root Task",
+            user_id="test-user"
+        )
+        
+        child1 = await repo.create_task(
+            name="Child 1",
+            user_id="test-user",
+            parent_id=root.id
+        )
+        
+        child2 = await repo.create_task(
+            name="Child 2",
+            user_id="test-user",
+            parent_id=root.id
+        )
+        
+        grandchild1 = await repo.create_task(
+            name="Grandchild 1",
+            user_id="test-user",
+            parent_id=child1.id
+        )
+        
+        grandchild2 = await repo.create_task(
+            name="Grandchild 2",
+            user_id="test-user",
+            parent_id=child1.id
+        )
+        
+        # Get all children recursively
+        all_children = await repo.get_all_children_recursive(root.id)
+        
+        # Should get child1, child2, grandchild1, grandchild2
+        assert len(all_children) == 4
+        child_ids = [c.id for c in all_children]
+        assert child1.id in child_ids
+        assert child2.id in child_ids
+        assert grandchild1.id in child_ids
+        assert grandchild2.id in child_ids
+    
+    @pytest.mark.asyncio
+    async def test_get_all_children_recursive_empty(self, sync_db_session):
+        """Test getting children for a task with no children"""
+        repo = TaskRepository(sync_db_session)
+        
+        root = await repo.create_task(
+            name="Root Task",
+            user_id="test-user"
+        )
+        
+        all_children = await repo.get_all_children_recursive(root.id)
+        
+        assert len(all_children) == 0
+    
+    @pytest.mark.asyncio
+    async def test_find_dependent_tasks(self, sync_db_session):
+        """Test finding tasks that depend on a given task"""
+        repo = TaskRepository(sync_db_session)
+        
+        # Create a task that will be a dependency
+        dep_task = await repo.create_task(
+            name="Dependency Task",
+            user_id="test-user"
+        )
+        
+        # Create tasks that depend on dep_task
+        dependent1 = await repo.create_task(
+            name="Dependent Task 1",
+            user_id="test-user",
+            dependencies=[{"id": dep_task.id, "required": True}]
+        )
+        
+        dependent2 = await repo.create_task(
+            name="Dependent Task 2",
+            user_id="test-user",
+            dependencies=[{"id": dep_task.id, "required": False}]
+        )
+        
+        # Create a task with no dependencies
+        independent = await repo.create_task(
+            name="Independent Task",
+            user_id="test-user"
+        )
+        
+        # Find tasks that depend on dep_task
+        dependents = await repo.find_dependent_tasks(dep_task.id)
+        
+        # Should find dependent1 and dependent2, but not independent
+        assert len(dependents) == 2
+        dependent_ids = [t.id for t in dependents]
+        assert dependent1.id in dependent_ids
+        assert dependent2.id in dependent_ids
+        assert independent.id not in dependent_ids
+    
+    @pytest.mark.asyncio
+    async def test_find_dependent_tasks_string_dependency(self, sync_db_session):
+        """Test finding dependent tasks with string dependency format"""
+        repo = TaskRepository(sync_db_session)
+        
+        dep_task = await repo.create_task(
+            name="Dependency Task",
+            user_id="test-user"
+        )
+        
+        # Create task with string dependency (not dict)
+        dependent = await repo.create_task(
+            name="Dependent Task",
+            user_id="test-user",
+            dependencies=[dep_task.id]  # String format
+        )
+        
+        dependents = await repo.find_dependent_tasks(dep_task.id)
+        
+        assert len(dependents) == 1
+        assert dependents[0].id == dependent.id
+    
+    @pytest.mark.asyncio
+    async def test_find_dependent_tasks_no_dependents(self, sync_db_session):
+        """Test finding dependents for a task with no dependents"""
+        repo = TaskRepository(sync_db_session)
+        
+        task = await repo.create_task(
+            name="Task",
+            user_id="test-user"
+        )
+        
+        dependents = await repo.find_dependent_tasks(task.id)
+        
+        assert len(dependents) == 0
+    
+    @pytest.mark.asyncio
+    async def test_delete_task(self, sync_db_session):
+        """Test physically deleting a task"""
+        repo = TaskRepository(sync_db_session)
+        
+        # Create a task
+        task = await repo.create_task(
+            name="Task to Delete",
+            user_id="test-user"
+        )
+        
+        task_id = task.id
+        
+        # Verify task exists
+        retrieved = await repo.get_task_by_id(task_id)
+        assert retrieved is not None
+        
+        # Delete the task
+        result = await repo.delete_task(task_id)
+        assert result is True
+        
+        # Verify task is deleted
+        deleted_task = await repo.get_task_by_id(task_id)
+        assert deleted_task is None
+    
+    @pytest.mark.asyncio
+    async def test_delete_task_not_found(self, sync_db_session):
+        """Test deleting a non-existent task"""
+        repo = TaskRepository(sync_db_session)
+        
+        result = await repo.delete_task("non-existent-id")
+        assert result is False
 

@@ -508,3 +508,282 @@ class TestHandleTaskExecute:
         assert isinstance(result, StreamingResponse)
         assert result.media_type == "text/event-stream"
 
+
+class TestHandleTaskDelete:
+    """Test cases for handle_task_delete method"""
+    
+    @pytest.mark.asyncio
+    async def test_delete_pending_task_no_children(self, task_routes, mock_request, use_test_db_session):
+        """Test deleting a pending task with no children"""
+        task_repository = TaskRepository(use_test_db_session, task_model_class=get_task_model_class())
+        
+        # Create a pending task (default status is pending)
+        task = await task_repository.create_task(
+            name="Task to Delete",
+            user_id="test_user"
+        )
+        
+        params = {"task_id": task.id}
+        request_id = str(uuid.uuid4())
+        
+        result = await task_routes.handle_task_delete(params, mock_request, request_id)
+        
+        # Verify deletion success
+        assert result["success"] is True
+        assert result["task_id"] == task.id
+        assert result["deleted_count"] == 1
+        assert result["children_deleted"] == 0
+        
+        # Verify task is physically deleted
+        deleted_task = await task_repository.get_task_by_id(task.id)
+        assert deleted_task is None
+    
+    @pytest.mark.asyncio
+    async def test_delete_pending_task_with_pending_children(self, task_routes, mock_request, use_test_db_session):
+        """Test deleting a pending task with all pending children"""
+        task_repository = TaskRepository(use_test_db_session, task_model_class=get_task_model_class())
+        
+        # Create task tree: root -> child1, child2 -> grandchild (all pending by default)
+        root = await task_repository.create_task(
+            name="Root Task",
+            user_id="test_user"
+        )
+        
+        child1 = await task_repository.create_task(
+            name="Child 1",
+            user_id="test_user",
+            parent_id=root.id
+        )
+        
+        child2 = await task_repository.create_task(
+            name="Child 2",
+            user_id="test_user",
+            parent_id=root.id
+        )
+        
+        grandchild = await task_repository.create_task(
+            name="Grandchild",
+            user_id="test_user",
+            parent_id=child1.id
+        )
+        
+        params = {"task_id": root.id}
+        request_id = str(uuid.uuid4())
+        
+        result = await task_routes.handle_task_delete(params, mock_request, request_id)
+        
+        # Verify deletion success
+        assert result["success"] is True
+        assert result["task_id"] == root.id
+        assert result["deleted_count"] == 4  # root + child1 + child2 + grandchild
+        assert result["children_deleted"] == 3
+        
+        # Verify all tasks are deleted
+        assert await task_repository.get_task_by_id(root.id) is None
+        assert await task_repository.get_task_by_id(child1.id) is None
+        assert await task_repository.get_task_by_id(child2.id) is None
+        assert await task_repository.get_task_by_id(grandchild.id) is None
+    
+    @pytest.mark.asyncio
+    async def test_delete_fails_with_non_pending_children(self, task_routes, mock_request, use_test_db_session):
+        """Test deletion fails when task has non-pending children"""
+        task_repository = TaskRepository(use_test_db_session, task_model_class=get_task_model_class())
+        
+        # Create task tree with non-pending child
+        root = await task_repository.create_task(
+            name="Root Task",
+            user_id="test_user"
+        )
+        
+        child1 = await task_repository.create_task(
+            name="Child 1",
+            user_id="test_user",
+            parent_id=root.id
+        )
+        
+        child2 = await task_repository.create_task(
+            name="Child 2",
+            user_id="test_user",
+            parent_id=root.id
+        )
+        
+        # Update child2 to non-pending status
+        await task_repository.update_task_status(child2.id, status="in_progress")
+        
+        params = {"task_id": root.id}
+        request_id = str(uuid.uuid4())
+        
+        with pytest.raises(ValueError) as exc_info:
+            await task_routes.handle_task_delete(params, mock_request, request_id)
+        
+        # Verify error message contains information about non-pending child
+        error_msg = str(exc_info.value)
+        assert "Cannot delete task" in error_msg
+        assert "non-pending children" in error_msg
+        assert child2.id in error_msg
+        assert "in_progress" in error_msg
+        
+        # Verify tasks are not deleted
+        assert await task_repository.get_task_by_id(root.id) is not None
+        assert await task_repository.get_task_by_id(child1.id) is not None
+        assert await task_repository.get_task_by_id(child2.id) is not None
+    
+    @pytest.mark.asyncio
+    async def test_delete_fails_with_non_pending_task(self, task_routes, mock_request, use_test_db_session):
+        """Test deletion fails when task itself is not pending"""
+        task_repository = TaskRepository(use_test_db_session, task_model_class=get_task_model_class())
+        
+        # Create a task and update to non-pending status
+        task = await task_repository.create_task(
+            name="Task to Delete",
+            user_id="test_user"
+        )
+        await task_repository.update_task_status(task.id, status="completed")
+        
+        params = {"task_id": task.id}
+        request_id = str(uuid.uuid4())
+        
+        with pytest.raises(ValueError) as exc_info:
+            await task_routes.handle_task_delete(params, mock_request, request_id)
+        
+        # Verify error message
+        error_msg = str(exc_info.value)
+        assert "Cannot delete task" in error_msg
+        assert "task status is 'completed'" in error_msg
+        assert "must be 'pending'" in error_msg
+        
+        # Verify task is not deleted
+        assert await task_repository.get_task_by_id(task.id) is not None
+    
+    @pytest.mark.asyncio
+    async def test_delete_fails_with_dependent_tasks(self, task_routes, mock_request, use_test_db_session):
+        """Test deletion fails when other tasks depend on this task"""
+        task_repository = TaskRepository(use_test_db_session, task_model_class=get_task_model_class())
+        
+        # Create a task that will be a dependency
+        dep_task = await task_repository.create_task(
+            name="Dependency Task",
+            user_id="test_user"
+        )
+        
+        # Create tasks that depend on dep_task
+        dependent1 = await task_repository.create_task(
+            name="Dependent Task 1",
+            user_id="test_user",
+            dependencies=[{"id": dep_task.id, "required": True}]
+        )
+        
+        dependent2 = await task_repository.create_task(
+            name="Dependent Task 2",
+            user_id="test_user",
+            dependencies=[{"id": dep_task.id, "required": False}]
+        )
+        
+        params = {"task_id": dep_task.id}
+        request_id = str(uuid.uuid4())
+        
+        with pytest.raises(ValueError) as exc_info:
+            await task_routes.handle_task_delete(params, mock_request, request_id)
+        
+        # Verify error message contains information about dependent tasks
+        error_msg = str(exc_info.value)
+        assert "Cannot delete task" in error_msg
+        assert "tasks depend on this task" in error_msg
+        assert dependent1.id in error_msg
+        assert dependent2.id in error_msg
+        
+        # Verify task is not deleted
+        assert await task_repository.get_task_by_id(dep_task.id) is not None
+    
+    @pytest.mark.asyncio
+    async def test_delete_fails_with_mixed_conditions(self, task_routes, mock_request, use_test_db_session):
+        """Test deletion fails with both non-pending children and dependencies"""
+        task_repository = TaskRepository(use_test_db_session, task_model_class=get_task_model_class())
+        
+        # Create task tree
+        root = await task_repository.create_task(
+            name="Root Task",
+            user_id="test_user"
+        )
+        
+        child1 = await task_repository.create_task(
+            name="Child 1",
+            user_id="test_user",
+            parent_id=root.id
+        )
+        
+        # Update child1 to non-pending status
+        await task_repository.update_task_status(child1.id, status="completed")
+        
+        # Create a task that depends on root
+        dependent = await task_repository.create_task(
+            name="Dependent Task",
+            user_id="test_user",
+            dependencies=[{"id": root.id, "required": True}]
+        )
+        
+        params = {"task_id": root.id}
+        request_id = str(uuid.uuid4())
+        
+        with pytest.raises(ValueError) as exc_info:
+            await task_routes.handle_task_delete(params, mock_request, request_id)
+        
+        # Verify error message contains both issues
+        error_msg = str(exc_info.value)
+        assert "Cannot delete task" in error_msg
+        assert "non-pending children" in error_msg
+        assert "tasks depend on this task" in error_msg
+        assert child1.id in error_msg
+        assert dependent.id in error_msg
+        
+        # Verify tasks are not deleted
+        assert await task_repository.get_task_by_id(root.id) is not None
+        assert await task_repository.get_task_by_id(child1.id) is not None
+        assert await task_repository.get_task_by_id(dependent.id) is not None
+    
+    @pytest.mark.asyncio
+    async def test_delete_task_not_found(self, task_routes, mock_request):
+        """Test deletion fails when task does not exist"""
+        params = {"task_id": "non-existent-task"}
+        request_id = str(uuid.uuid4())
+        
+        with pytest.raises(ValueError, match="not found"):
+            await task_routes.handle_task_delete(params, mock_request, request_id)
+    
+    @pytest.mark.asyncio
+    async def test_delete_missing_task_id(self, task_routes, mock_request):
+        """Test deletion fails when task_id is missing"""
+        params = {}
+        request_id = str(uuid.uuid4())
+        
+        with pytest.raises(ValueError, match="Task ID is required"):
+            await task_routes.handle_task_delete(params, mock_request, request_id)
+    
+    @pytest.mark.asyncio
+    async def test_delete_with_permission_check(self, task_routes, use_test_db_session):
+        """Test deletion respects permission checks"""
+        task_repository = TaskRepository(use_test_db_session, task_model_class=get_task_model_class())
+        
+        # Create a task with a specific user_id
+        task = await task_repository.create_task(
+            name="Task to Delete",
+            user_id="user1"
+        )
+        
+        # Create a mock request with different user
+        mock_request = Mock(spec=Request)
+        mock_request.state = Mock()
+        mock_request.state.user_id = "user2"  # Different user
+        mock_request.state.token_payload = None
+        
+        # Mock permission check to raise ValueError (permission denied)
+        with patch.object(task_routes, '_check_permission', side_effect=ValueError("Permission denied")):
+            params = {"task_id": task.id}
+            request_id = str(uuid.uuid4())
+            
+            with pytest.raises(ValueError, match="Permission denied"):
+                await task_routes.handle_task_delete(params, mock_request, request_id)
+        
+        # Verify task is not deleted
+        assert await task_repository.get_task_by_id(task.id) is not None
+
