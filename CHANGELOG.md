@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Unified A2A Protocol Task Management**
+  - All task management operations now fully supported through A2A Protocol `/` route
+  - Standardized method naming: `tasks.execute`, `tasks.create`, `tasks.get`, `tasks.update`, `tasks.delete`, `tasks.detail`, `tasks.tree`, `tasks.list`, `tasks.children`, `tasks.running.list`, `tasks.running.status`, `tasks.running.count`, `tasks.cancel`, `tasks.copy`
+  - `TaskRoutesAdapter` component bridges A2A Protocol `RequestContext`/`EventQueue` with existing `TaskRoutes` handlers
+  - Automatic conversion between A2A Protocol format and internal task representation
+  - Real-time task status updates via `TaskStatusUpdateEvent` for all task management operations
+  - Backward compatibility: `execute_task_tree` skill ID still supported (maps to `tasks.execute`)
+  - All 14 task management skills registered in Agent Card for protocol compliance
+  - Comprehensive test coverage with 17+ test cases for all task management methods
+  - Fixed `MessageSendConfiguration` access error: Properly handle Pydantic model attributes instead of dictionary methods
+
+### Fixed
+- **A2A Protocol Configuration Access**
+  - Fixed `AttributeError: 'MessageSendConfiguration' object has no attribute 'get'` in `TaskRoutesAdapter`
+  - Properly handle Pydantic model attributes using `getattr()` and `model_dump()` instead of dictionary methods
+  - Compatible with both Pydantic v1 and v2
+  - All 5 previously failing integration tests now pass
+
 - **A2A Protocol Cancel Method Implementation**
   - Complete implementation of `AgentExecutor.cancel()` method for A2A Protocol
   - Task ID extraction with priority: `task_id` > `context_id` > `metadata.task_id` > `metadata.context_id`

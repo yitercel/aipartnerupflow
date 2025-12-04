@@ -62,7 +62,7 @@ curl -X POST http://localhost:8000/ \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
-    "method": "execute_task_tree",
+    "method": "tasks.execute",
     "params": {
       "tasks": [
         {
@@ -77,7 +77,21 @@ curl -X POST http://localhost:8000/ \
   }'
 ```
 
-### Task Management Endpoints
+**Note:** The method `execute_task_tree` is still supported for backward compatibility, but `tasks.execute` is the recommended standard method name.
+
+### Task Management via A2A Protocol
+
+All task management operations are now fully supported through the A2A Protocol `/` route:
+
+- **Task Execution**: `tasks.execute` (or `execute_task_tree` for backward compatibility)
+- **Task CRUD**: `tasks.create`, `tasks.get`, `tasks.update`, `tasks.delete`
+- **Task Query**: `tasks.detail`, `tasks.tree`, `tasks.list`, `tasks.children`
+- **Running Tasks**: `tasks.running.list`, `tasks.running.status`, `tasks.running.count`
+- **Task Control**: `tasks.cancel`, `tasks.copy`
+
+All methods follow the same A2A Protocol JSON-RPC format and return A2A Protocol Task objects with real-time status updates.
+
+### Task Management Endpoints (Legacy JSON-RPC)
 
 #### Create Tasks
 
@@ -166,7 +180,7 @@ async with httpx.AsyncClient() as client:
         "http://localhost:8000/",
         json={
             "jsonrpc": "2.0",
-            "method": "execute_task_tree",
+            "method": "tasks.execute",
             "params": {
                 "tasks": [
                     {
@@ -195,7 +209,7 @@ const response = await fetch('http://localhost:8000/', {
   },
   body: JSON.stringify({
     jsonrpc: '2.0',
-    method: 'execute_task_tree',
+    method: 'tasks.execute',
     params: {
       tasks: [
         {

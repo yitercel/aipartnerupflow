@@ -12,7 +12,8 @@ import json
 from unittest.mock import Mock, AsyncMock, patch
 from a2a.server.agent_execution import RequestContext
 from a2a.server.events import EventQueue
-from a2a.types import Message, DataPart
+from a2a.types import Message, DataPart, Task, TaskState, TaskStatus
+from a2a.utils import new_agent_text_message
 
 from aipartnerupflow.api.a2a.agent_executor import AIPartnerUpFlowAgentExecutor
 from aipartnerupflow.core.storage.sqlalchemy.task_repository import TaskRepository
@@ -36,7 +37,20 @@ class TestAgentExecutor:
     @pytest.fixture
     def executor(self):
         """Create AIPartnerUpFlowAgentExecutor instance"""
-        return AIPartnerUpFlowAgentExecutor()
+        # Create executor with mocked TaskRoutes for testing
+        from aipartnerupflow.api.routes.tasks import TaskRoutes
+        from aipartnerupflow.core.storage.sqlalchemy.models import TaskModel
+        
+        task_routes = TaskRoutes(
+            task_model_class=TaskModel,
+            verify_token_func=None,
+            verify_permission_func=None
+        )
+        
+        return AIPartnerUpFlowAgentExecutor(
+            task_routes=task_routes,
+            verify_token_func=None
+        )
     
     @pytest.fixture
     def mock_event_queue(self):
@@ -1666,4 +1680,550 @@ class TestAgentExecutor:
             assert "protocol" in event_data
             # error should not be included if None
             assert "error" not in event_data or event_data.get("error") is None
+    
+    # ============================================================================
+    # Task Management Methods Tests (via adapter)
+    # ============================================================================
+    
+    def _create_request_context_with_method(self, method: str, params: dict = None, metadata: dict = None) -> RequestContext:
+        """Helper to create RequestContext with method and parameters"""
+        if params is None:
+            params = {}
+        if metadata is None:
+            metadata = {}
+        
+        metadata["method"] = method
+        metadata.update(params)
+        
+        # Create message with DataPart containing params
+        message = Mock(spec=Message)
+        message.parts = []
+        
+        if params:
+            data_part = Mock()
+            data_part.root = DataPart(data=params)
+            message.parts.append(data_part)
+        
+        context = Mock(spec=RequestContext)
+        context.task_id = str(uuid.uuid4())
+        context.context_id = str(uuid.uuid4())
+        context.metadata = metadata
+        context.message = message
+        context.configuration = {}
+        
+        return context
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_tasks_create_method(self, executor, mock_event_queue):
+        """Test execute with tasks.create method routes to adapter"""
+        context = self._create_request_context_with_method(
+            method="tasks.create",
+            params={"name": "Test Task", "user_id": "test-user"}
+        )
+        
+        # Mock the adapter's call_handler
+        with patch.object(executor.task_routes_adapter, 'call_handler') as mock_call_handler, \
+             patch.object(executor.task_routes_adapter, 'convert_result_to_a2a_format') as mock_convert:
+            mock_result = {"id": "task-123", "name": "Test Task", "status": "pending"}
+            mock_call_handler.return_value = mock_result
+            
+            mock_a2a_task = Mock(spec=Task)
+            mock_a2a_task.id = "task-123"
+            mock_a2a_task.context_id = context.context_id
+            mock_a2a_task.status = TaskStatus(
+                state=TaskState.completed,
+                message=new_agent_text_message("Task updated")
+            )
+            mock_convert.return_value = mock_a2a_task
+            
+            result = await executor.execute(context, mock_event_queue)
+            
+            # Verify adapter was called
+            mock_call_handler.assert_called_once()
+            call_args = mock_call_handler.call_args
+            method_arg = call_args.kwargs.get("method") if call_args.kwargs else (call_args.args[0] if call_args.args else None)
+            assert method_arg == "tasks.create"
+            
+            # Verify result is returned
+            assert result == mock_a2a_task
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_tasks_get_method(self, executor, mock_event_queue):
+        """Test execute with tasks.get method routes to adapter"""
+        context = self._create_request_context_with_method(
+            method="tasks.get",
+            params={"task_id": "task-123"}
+        )
+        
+        with patch.object(executor.task_routes_adapter, 'call_handler') as mock_call_handler, \
+             patch.object(executor.task_routes_adapter, 'convert_result_to_a2a_format') as mock_convert:
+            mock_result = {"id": "task-123", "name": "Test Task", "status": "completed"}
+            mock_call_handler.return_value = mock_result
+            
+            mock_a2a_task = Mock(spec=Task)
+            mock_a2a_task.id = "task-123"
+            mock_a2a_task.context_id = context.context_id
+            mock_a2a_task.status = TaskStatus(
+                state=TaskState.completed,
+                message=new_agent_text_message("Task updated")
+            )
+            mock_convert.return_value = mock_a2a_task
+            
+            result = await executor.execute(context, mock_event_queue)
+            
+            mock_call_handler.assert_called_once()
+            call_args = mock_call_handler.call_args
+            method_arg = call_args.kwargs.get("method") if call_args.kwargs else (call_args.args[0] if call_args.args else None)
+            assert method_arg == "tasks.get"
+            assert result == mock_a2a_task
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_tasks_list_method(self, executor, mock_event_queue):
+        """Test execute with tasks.list method routes to adapter"""
+        context = self._create_request_context_with_method(
+            method="tasks.list",
+            params={"user_id": "test-user", "limit": 10}
+        )
+        
+        with patch.object(executor.task_routes_adapter, 'call_handler') as mock_call_handler, \
+             patch.object(executor.task_routes_adapter, 'convert_result_to_a2a_format') as mock_convert:
+            mock_result = [
+                {"id": "task-1", "name": "Task 1", "status": "completed"},
+                {"id": "task-2", "name": "Task 2", "status": "pending"}
+            ]
+            mock_call_handler.return_value = mock_result
+            
+            mock_a2a_tasks = [
+                Mock(spec=Task),
+                Mock(spec=Task)
+            ]
+            mock_a2a_tasks[0].id = "task-1"
+            mock_a2a_tasks[0].context_id = context.context_id
+            mock_a2a_tasks[0].status = TaskStatus(
+                state=TaskState.completed,
+                message=new_agent_text_message("Task completed")
+            )
+            mock_a2a_tasks[1].id = "task-2"
+            mock_a2a_tasks[1].context_id = context.context_id
+            mock_a2a_tasks[1].status = TaskStatus(
+                state=TaskState.completed,
+                message=new_agent_text_message("Task completed")
+            )
+            mock_convert.return_value = mock_a2a_tasks
+            
+            result = await executor.execute(context, mock_event_queue)
+            
+            mock_call_handler.assert_called_once()
+            call_args = mock_call_handler.call_args
+            method_arg = call_args.kwargs.get("method") if call_args.kwargs else (call_args.args[0] if call_args.args else None)
+            assert method_arg == "tasks.list"
+            assert result == mock_a2a_tasks
+            # Verify events were sent for each task
+            assert mock_event_queue.enqueue_event.call_count == 2
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_skill_id_execute_task_tree(self, executor, mock_event_queue):
+        """Test execute with skill_id=execute_task_tree uses original execution logic"""
+        context = self._create_request_context_with_method(
+            method=None,  # No method, but skill_id in metadata
+            metadata={"skill_id": "execute_task_tree"}
+        )
+        
+        # Add tasks to message
+        tasks = [{"id": "task-1", "name": "Test Task", "user_id": "test-user"}]
+        message = Mock(spec=Message)
+        message.parts = []
+        data_part = Mock()
+        data_part.root = DataPart(data={"tasks": tasks})
+        message.parts.append(data_part)
+        context.message = message
+        
+        # Mock task execution
+        with patch.object(executor, '_execute_simple_mode') as mock_execute:
+            mock_task = Mock(spec=Task)
+            mock_execute.return_value = mock_task
+            
+            result = await executor.execute(context, mock_event_queue)
+            
+            # Verify original execution logic was used
+            mock_execute.assert_called_once()
+            assert result == mock_task
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_tasks_execute_method(self, executor, mock_event_queue):
+        """Test execute with tasks.execute method uses original execution logic"""
+        context = self._create_request_context_with_method(
+            method="tasks.execute",
+            params={"task_id": "task-123"}
+        )
+        
+        # Add tasks to message for execution
+        tasks = [{"id": "task-1", "name": "Test Task", "user_id": "test-user"}]
+        message = Mock(spec=Message)
+        message.parts = []
+        data_part = Mock()
+        data_part.root = DataPart(data={"tasks": tasks})
+        message.parts.append(data_part)
+        context.message = message
+        
+        with patch.object(executor, '_execute_simple_mode') as mock_execute:
+            mock_task = Mock(spec=Task)
+            mock_execute.return_value = mock_task
+            
+            result = await executor.execute(context, mock_event_queue)
+            
+            # Verify original execution logic was used
+            mock_execute.assert_called_once()
+            assert result == mock_task
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_unknown_method_defaults_to_execution(self, executor, mock_event_queue):
+        """Test execute with no method defaults to task execution (backward compatibility)"""
+        context = self._create_request_context_with_method(
+            method=None,
+            metadata={}
+        )
+        
+        # Add tasks to message
+        tasks = [{"id": "task-1", "name": "Test Task", "user_id": "test-user"}]
+        message = Mock(spec=Message)
+        message.parts = []
+        data_part = Mock()
+        data_part.root = DataPart(data={"tasks": tasks})
+        message.parts.append(data_part)
+        context.message = message
+        
+        with patch.object(executor, '_execute_simple_mode') as mock_execute:
+            mock_task = Mock(spec=Task)
+            mock_execute.return_value = mock_task
+            
+            result = await executor.execute(context, mock_event_queue)
+            
+            # Verify default execution logic was used
+            mock_execute.assert_called_once()
+            assert result == mock_task
+    
+    @pytest.mark.asyncio
+    async def test_execute_task_management_method_error_handling(self, executor, mock_event_queue):
+        """Test error handling in task management method execution"""
+        context = self._create_request_context_with_method(
+            method="tasks.get",
+            params={"task_id": "nonexistent"}
+        )
+        
+        with patch.object(executor.task_routes_adapter, 'call_handler') as mock_call_handler:
+            mock_call_handler.side_effect = ValueError("Task not found")
+            
+            with pytest.raises(ValueError):
+                await executor.execute(context, mock_event_queue)
+            
+            # Verify error event was sent
+            assert mock_event_queue.enqueue_event.called
+            call_args = mock_event_queue.enqueue_event.call_args[0][0]
+            assert call_args.status.state == TaskState.failed
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_tasks_update_method(self, executor, mock_event_queue):
+        """Test execute with tasks.update method routes to adapter"""
+        context = self._create_request_context_with_method(
+            method="tasks.update",
+            params={"task_id": "task-123", "name": "Updated Task"}
+        )
+        
+        with patch.object(executor.task_routes_adapter, 'call_handler') as mock_call_handler, \
+             patch.object(executor.task_routes_adapter, 'convert_result_to_a2a_format') as mock_convert:
+            mock_result = {"id": "task-123", "name": "Updated Task", "status": "pending"}
+            mock_call_handler.return_value = mock_result
+            
+            mock_a2a_task = Mock(spec=Task)
+            mock_a2a_task.id = "task-123"
+            mock_a2a_task.context_id = context.context_id
+            mock_a2a_task.status = TaskStatus(
+                state=TaskState.completed,
+                message=new_agent_text_message("Task updated")
+            )
+            mock_convert.return_value = mock_a2a_task
+            
+            result = await executor.execute(context, mock_event_queue)
+            
+            mock_call_handler.assert_called_once()
+            # Check method parameter (can be positional or keyword)
+            call_args = mock_call_handler.call_args
+            method_arg = call_args.kwargs.get("method") if call_args.kwargs else (call_args.args[0] if call_args.args else None)
+            assert method_arg == "tasks.update"
+            assert result == mock_a2a_task
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_tasks_delete_method(self, executor, mock_event_queue):
+        """Test execute with tasks.delete method routes to adapter"""
+        context = self._create_request_context_with_method(
+            method="tasks.delete",
+            params={"task_id": "task-123"}
+        )
+        
+        with patch.object(executor.task_routes_adapter, 'call_handler') as mock_call_handler, \
+             patch.object(executor.task_routes_adapter, 'convert_result_to_a2a_format') as mock_convert:
+            mock_result = {"success": True, "task_id": "task-123", "deleted_count": 1}
+            mock_call_handler.return_value = mock_result
+            
+            mock_a2a_result = {"protocol": "a2a", "result": mock_result}
+            mock_convert.return_value = mock_a2a_result
+            
+            result = await executor.execute(context, mock_event_queue)
+            
+            mock_call_handler.assert_called_once()
+            call_args = mock_call_handler.call_args
+            method_arg = call_args.kwargs.get("method") if call_args.kwargs else (call_args.args[0] if call_args.args else None)
+            assert method_arg == "tasks.delete"
+            assert result == mock_a2a_result
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_tasks_detail_method(self, executor, mock_event_queue):
+        """Test execute with tasks.detail method routes to adapter"""
+        context = self._create_request_context_with_method(
+            method="tasks.detail",
+            params={"task_id": "task-123"}
+        )
+        
+        with patch.object(executor.task_routes_adapter, 'call_handler') as mock_call_handler, \
+             patch.object(executor.task_routes_adapter, 'convert_result_to_a2a_format') as mock_convert:
+            mock_result = {"id": "task-123", "name": "Test Task", "status": "completed", "result": "success"}
+            mock_call_handler.return_value = mock_result
+            
+            mock_a2a_task = Mock(spec=Task)
+            mock_a2a_task.id = "task-123"
+            mock_a2a_task.context_id = context.context_id
+            mock_a2a_task.status = TaskStatus(
+                state=TaskState.completed,
+                message=new_agent_text_message("Task updated")
+            )
+            mock_convert.return_value = mock_a2a_task
+            
+            result = await executor.execute(context, mock_event_queue)
+            
+            mock_call_handler.assert_called_once()
+            call_args = mock_call_handler.call_args
+            method_arg = call_args.kwargs.get("method") if call_args.kwargs else (call_args.args[0] if call_args.args else None)
+            assert method_arg == "tasks.detail"
+            assert result == mock_a2a_task
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_tasks_tree_method(self, executor, mock_event_queue):
+        """Test execute with tasks.tree method routes to adapter"""
+        context = self._create_request_context_with_method(
+            method="tasks.tree",
+            params={"task_id": "task-123"}
+        )
+        
+        with patch.object(executor.task_routes_adapter, 'call_handler') as mock_call_handler, \
+             patch.object(executor.task_routes_adapter, 'convert_result_to_a2a_format') as mock_convert:
+            mock_result = {"id": "task-123", "name": "Root Task", "children": []}
+            mock_call_handler.return_value = mock_result
+            
+            mock_a2a_task = Mock(spec=Task)
+            mock_a2a_task.id = "task-123"
+            mock_a2a_task.context_id = context.context_id
+            mock_a2a_task.status = TaskStatus(
+                state=TaskState.completed,
+                message=new_agent_text_message("Task updated")
+            )
+            mock_convert.return_value = mock_a2a_task
+            
+            result = await executor.execute(context, mock_event_queue)
+            
+            mock_call_handler.assert_called_once()
+            call_args = mock_call_handler.call_args
+            method_arg = call_args.kwargs.get("method") if call_args.kwargs else (call_args.args[0] if call_args.args else None)
+            assert method_arg == "tasks.tree"
+            assert result == mock_a2a_task
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_tasks_children_method(self, executor, mock_event_queue):
+        """Test execute with tasks.children method routes to adapter"""
+        context = self._create_request_context_with_method(
+            method="tasks.children",
+            params={"parent_id": "task-123"}
+        )
+        
+        with patch.object(executor.task_routes_adapter, 'call_handler') as mock_call_handler, \
+             patch.object(executor.task_routes_adapter, 'convert_result_to_a2a_format') as mock_convert:
+            mock_result = [
+                {"id": "child-1", "name": "Child 1", "status": "pending"},
+                {"id": "child-2", "name": "Child 2", "status": "pending"}
+            ]
+            mock_call_handler.return_value = mock_result
+            
+            mock_a2a_tasks = [Mock(spec=Task), Mock(spec=Task)]
+            mock_a2a_tasks[0].id = "child-1"
+            mock_a2a_tasks[0].context_id = context.context_id
+            mock_a2a_tasks[0].status = TaskStatus(
+                state=TaskState.completed,
+                message=new_agent_text_message("Task completed")
+            )
+            mock_a2a_tasks[1].id = "child-2"
+            mock_a2a_tasks[1].context_id = context.context_id
+            mock_a2a_tasks[1].status = TaskStatus(
+                state=TaskState.completed,
+                message=new_agent_text_message("Task completed")
+            )
+            mock_convert.return_value = mock_a2a_tasks
+            
+            result = await executor.execute(context, mock_event_queue)
+            
+            mock_call_handler.assert_called_once()
+            call_args = mock_call_handler.call_args
+            method_arg = call_args.kwargs.get("method") if call_args.kwargs else (call_args.args[0] if call_args.args else None)
+            assert method_arg == "tasks.children"
+            assert result == mock_a2a_tasks
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_tasks_running_list_method(self, executor, mock_event_queue):
+        """Test execute with tasks.running.list method routes to adapter"""
+        context = self._create_request_context_with_method(
+            method="tasks.running.list",
+            params={"user_id": "test-user"}
+        )
+        
+        with patch.object(executor.task_routes_adapter, 'call_handler') as mock_call_handler, \
+             patch.object(executor.task_routes_adapter, 'convert_result_to_a2a_format') as mock_convert:
+            mock_result = [
+                {"id": "running-1", "name": "Running Task 1", "status": "in_progress"},
+                {"id": "running-2", "name": "Running Task 2", "status": "in_progress"}
+            ]
+            mock_call_handler.return_value = mock_result
+            
+            mock_a2a_tasks = [Mock(spec=Task), Mock(spec=Task)]
+            mock_a2a_tasks[0].id = "running-1"
+            mock_a2a_tasks[0].context_id = context.context_id
+            mock_a2a_tasks[0].status = TaskStatus(
+                state=TaskState.working,
+                message=new_agent_text_message("Task in progress")
+            )
+            mock_a2a_tasks[1].id = "running-2"
+            mock_a2a_tasks[1].context_id = context.context_id
+            mock_a2a_tasks[1].status = TaskStatus(
+                state=TaskState.working,
+                message=new_agent_text_message("Task in progress")
+            )
+            mock_convert.return_value = mock_a2a_tasks
+            
+            result = await executor.execute(context, mock_event_queue)
+            
+            mock_call_handler.assert_called_once()
+            call_args = mock_call_handler.call_args
+            method_arg = call_args.kwargs.get("method") if call_args.kwargs else (call_args.args[0] if call_args.args else None)
+            assert method_arg == "tasks.running.list"
+            assert result == mock_a2a_tasks
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_tasks_running_status_method(self, executor, mock_event_queue):
+        """Test execute with tasks.running.status method routes to adapter"""
+        context = self._create_request_context_with_method(
+            method="tasks.running.status",
+            params={"task_ids": ["task-1", "task-2"]}
+        )
+        
+        with patch.object(executor.task_routes_adapter, 'call_handler') as mock_call_handler, \
+             patch.object(executor.task_routes_adapter, 'convert_result_to_a2a_format') as mock_convert:
+            mock_result = [
+                {"task_id": "task-1", "status": "in_progress", "progress": 0.5},
+                {"task_id": "task-2", "status": "in_progress", "progress": 0.8}
+            ]
+            mock_call_handler.return_value = mock_result
+            
+            mock_a2a_result = {"protocol": "a2a", "result": mock_result}
+            mock_convert.return_value = mock_a2a_result
+            
+            result = await executor.execute(context, mock_event_queue)
+            
+            mock_call_handler.assert_called_once()
+            call_args = mock_call_handler.call_args
+            method_arg = call_args.kwargs.get("method") if call_args.kwargs else (call_args.args[0] if call_args.args else None)
+            assert method_arg == "tasks.running.status"
+            assert result == mock_a2a_result
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_tasks_running_count_method(self, executor, mock_event_queue):
+        """Test execute with tasks.running.count method routes to adapter"""
+        context = self._create_request_context_with_method(
+            method="tasks.running.count",
+            params={"user_id": "test-user"}
+        )
+        
+        with patch.object(executor.task_routes_adapter, 'call_handler') as mock_call_handler, \
+             patch.object(executor.task_routes_adapter, 'convert_result_to_a2a_format') as mock_convert:
+            mock_result = {"count": 5, "user_id": "test-user"}
+            mock_call_handler.return_value = mock_result
+            
+            mock_a2a_result = {"protocol": "a2a", "result": mock_result}
+            mock_convert.return_value = mock_a2a_result
+            
+            result = await executor.execute(context, mock_event_queue)
+            
+            mock_call_handler.assert_called_once()
+            call_args = mock_call_handler.call_args
+            method_arg = call_args.kwargs.get("method") if call_args.kwargs else (call_args.args[0] if call_args.args else None)
+            assert method_arg == "tasks.running.count"
+            assert result == mock_a2a_result
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_tasks_copy_method(self, executor, mock_event_queue):
+        """Test execute with tasks.copy method routes to adapter"""
+        context = self._create_request_context_with_method(
+            method="tasks.copy",
+            params={"task_id": "task-123", "children": True}
+        )
+        
+        with patch.object(executor.task_routes_adapter, 'call_handler') as mock_call_handler, \
+             patch.object(executor.task_routes_adapter, 'convert_result_to_a2a_format') as mock_convert:
+            mock_result = {"id": "task-456", "name": "Copied Task", "status": "pending"}
+            mock_call_handler.return_value = mock_result
+            
+            mock_a2a_task = Mock(spec=Task)
+            mock_a2a_task.id = "task-456"
+            mock_a2a_task.context_id = context.context_id
+            mock_a2a_task.status = TaskStatus(
+                state=TaskState.completed,
+                message=new_agent_text_message("Task copied")
+            )
+            mock_convert.return_value = mock_a2a_task
+            
+            result = await executor.execute(context, mock_event_queue)
+            
+            mock_call_handler.assert_called_once()
+            call_args = mock_call_handler.call_args
+            method_arg = call_args.kwargs.get("method") if call_args.kwargs else (call_args.args[0] if call_args.args else None)
+            assert method_arg == "tasks.copy"
+            assert result == mock_a2a_task
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_skill_id_mapping(self, executor, mock_event_queue):
+        """Test execute with skill_id maps to method name"""
+        context = self._create_request_context_with_method(
+            method=None,
+            metadata={"skill_id": "tasks.create"}
+        )
+        
+        with patch.object(executor.task_routes_adapter, 'call_handler') as mock_call_handler, \
+             patch.object(executor.task_routes_adapter, 'convert_result_to_a2a_format') as mock_convert:
+            mock_result = {"id": "task-123", "name": "Test Task", "status": "pending"}
+            mock_call_handler.return_value = mock_result
+            
+            mock_a2a_task = Mock(spec=Task)
+            mock_a2a_task.id = "task-123"
+            mock_a2a_task.context_id = context.context_id
+            mock_a2a_task.status = TaskStatus(
+                state=TaskState.completed,
+                message=new_agent_text_message("Task updated")
+            )
+            mock_convert.return_value = mock_a2a_task
+            
+            result = await executor.execute(context, mock_event_queue)
+            
+            # Verify skill_id was mapped to method
+            mock_call_handler.assert_called_once()
+            call_args = mock_call_handler.call_args
+            method_arg = call_args.kwargs.get("method") if call_args.kwargs else (call_args.args[0] if call_args.args else None)
+            assert method_arg == "tasks.create"
+            assert result == mock_a2a_task
 

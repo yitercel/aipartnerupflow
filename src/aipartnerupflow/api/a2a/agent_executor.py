@@ -8,7 +8,10 @@ from a2a.utils import new_agent_text_message, new_agent_parts_message
 from a2a.types import DataPart, Task, Artifact, Part
 from a2a.types import TaskStatusUpdateEvent, TaskStatus, TaskState
 import uuid
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from typing import Callable
 from datetime import datetime, timezone
 
 from aipartnerupflow.core.execution.task_executor import TaskExecutor
@@ -17,6 +20,8 @@ from aipartnerupflow.core.storage import get_default_session
 from aipartnerupflow.core.storage.sqlalchemy.task_repository import TaskRepository
 from aipartnerupflow.core.config import get_task_model_class
 from aipartnerupflow.api.a2a.event_queue_bridge import EventQueueBridge
+from aipartnerupflow.api.a2a.task_routes_adapter import TaskRoutesAdapter
+from aipartnerupflow.api.routes.tasks import TaskRoutes
 from aipartnerupflow.core.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -32,7 +37,7 @@ class AIPartnerUpFlowAgentExecutor(AgentExecutor):
     Supports custom TaskModel classes via task_model_class parameter.
     """
 
-    def __init__(self):
+    def __init__(self, task_routes: Optional[TaskRoutes] = None, verify_token_func: Optional["Callable[[str], Optional[dict]]"] = None):
         """
         Initialize agent executor
         
@@ -48,6 +53,10 @@ class AIPartnerUpFlowAgentExecutor(AgentExecutor):
             
             set_task_model_class(MyTaskModel)
             executor = AIPartnerUpFlowAgentExecutor()  # Configuration from registry
+        
+        Args:
+            task_routes: Optional TaskRoutes instance. If None, will be created automatically.
+            verify_token_func: Optional JWT verification function for permission checking.
         """
         # Initialize task executor which manages task execution and tracking
         self.task_executor = TaskExecutor()
@@ -55,6 +64,23 @@ class AIPartnerUpFlowAgentExecutor(AgentExecutor):
         # (important for tests where hooks may be registered after TaskExecutor singleton initialization)
         self.task_executor.refresh_config()
         self.task_model_class = get_task_model_class()
+        
+        # Initialize TaskRoutes adapter for task management operations
+        # If task_routes is not provided, create it with default configuration
+        if task_routes is None:
+            # Create TaskRoutes with default configuration
+            # Note: verify_token_func and verify_permission_func will be None
+            # Permission checking will be handled at the middleware level
+            task_routes = TaskRoutes(
+                task_model_class=self.task_model_class,
+                verify_token_func=verify_token_func,
+                verify_permission_func=None
+            )
+        
+        self.task_routes_adapter = TaskRoutesAdapter(
+            task_routes=task_routes,
+            verify_token_func=verify_token_func
+        )
         
         logger.info(
             f"Initialized AIPartnerUpFlowAgentExecutor "
@@ -77,27 +103,51 @@ class AIPartnerUpFlowAgentExecutor(AgentExecutor):
         event_queue: EventQueue,
     ) -> Any:
         """
-        Execute task tree from tasks array
+        Execute task management operation or task tree execution
+        
+        This method routes to different handlers based on the method/skill_id:
+        - If method is "tasks.execute" or skill_id is "tasks.execute" (or "execute_task_tree" for backward compatibility): Execute task tree (original behavior)
+        - Otherwise: Route to appropriate TaskRoutes handler via adapter
         
         Args:
             context: Request context from A2A protocol
             event_queue: Event queue for streaming updates
             
         Returns:
-            Result from simple mode execution, or None for streaming mode
+            Result from handler (Task object, List[Task], or dict) or None for streaming mode
         """
         logger.debug(f"Context configuration: {context.configuration}")
         logger.debug(f"Context metadata: {context.metadata}")
         
-        # Check if streaming mode should be used
+        # Extract method from context
+        method = self.task_routes_adapter.extract_method(context)
+        
+        # If method is tasks.execute or skill_id is tasks.execute (or execute_task_tree for backward compatibility), use original execution logic
+        skill_id = context.metadata.get("skill_id") if context.metadata else None
+        if method == "tasks.execute" or skill_id == "tasks.execute" or skill_id == "execute_task_tree":
+            # Original task execution behavior
+            use_streaming_mode = self._should_use_streaming_mode(context)
+            
+            if use_streaming_mode:
+                # Streaming mode: push multiple status update events
+                await self._execute_streaming_mode(context, event_queue)
+                return None
+            else:
+                # Simple mode: return result directly
+                return await self._execute_simple_mode(context, event_queue)
+        
+        # For other methods, route to TaskRoutes handlers via adapter
+        if method:
+            return await self._execute_task_management_method(context, event_queue, method)
+        
+        # If no method specified, default to task execution (backward compatibility)
+        logger.warning("No method specified in context, defaulting to task execution")
         use_streaming_mode = self._should_use_streaming_mode(context)
         
         if use_streaming_mode:
-            # Streaming mode: push multiple status update events
             await self._execute_streaming_mode(context, event_queue)
             return None
         else:
-            # Simple mode: return result directly
             return await self._execute_simple_mode(context, event_queue)
 
     def _should_use_streaming_mode(self, context: RequestContext) -> bool:
@@ -661,4 +711,87 @@ class AIPartnerUpFlowAgentExecutor(AgentExecutor):
             final=True
         )
         await event_queue.enqueue_event(status_update)
+    
+    async def _execute_task_management_method(
+        self,
+        context: RequestContext,
+        event_queue: EventQueue,
+        method: str
+    ) -> Any:
+        """
+        Execute a task management method via TaskRoutes adapter
+        
+        Args:
+            context: Request context from A2A protocol
+            event_queue: Event queue for streaming updates
+            method: Method name (e.g., "tasks.create", "tasks.get")
+            
+        Returns:
+            Result in A2A protocol format (Task, List[Task], or dict)
+        """
+        try:
+            request_id = str(uuid.uuid4())
+            
+            # Extract parameters from context
+            params = self.task_routes_adapter.extract_params(context, method)
+            
+            logger.info(f"Executing task management method: {method} with params: {params}")
+            
+            # Call handler via adapter
+            result = await self.task_routes_adapter.call_handler(
+                method=method,
+                params=params,
+                context=context,
+                request_id=request_id
+            )
+            
+            # Convert result to A2A protocol format
+            a2a_result = self.task_routes_adapter.convert_result_to_a2a_format(
+                result=result,
+                method=method,
+                context=context
+            )
+            
+            # Send result as TaskStatusUpdateEvent if it's a Task or list of Tasks
+            if isinstance(a2a_result, Task):
+                # Single task result
+                status_update = TaskStatusUpdateEvent(
+                    task_id=a2a_result.id,
+                    context_id=a2a_result.context_id,
+                    status=a2a_result.status,
+                    final=True
+                )
+                await event_queue.enqueue_event(status_update)
+            elif isinstance(a2a_result, list) and a2a_result and isinstance(a2a_result[0], Task):
+                # List of tasks - send status update for each
+                for task in a2a_result:
+                    status_update = TaskStatusUpdateEvent(
+                        task_id=task.id,
+                        context_id=task.context_id,
+                        status=task.status,
+                        final=True
+                    )
+                    await event_queue.enqueue_event(status_update)
+            elif isinstance(a2a_result, dict):
+                # Dictionary result - send as status update
+                task_id = a2a_result.get("task_id") or context.task_id or context.context_id
+                context_id = a2a_result.get("context_id") or context.context_id or task_id
+                
+                status_update = TaskStatusUpdateEvent(
+                    task_id=task_id,
+                    context_id=context_id,
+                    status=TaskStatus(
+                        state=TaskState.completed,
+                        message=new_agent_parts_message([DataPart(data=a2a_result)])
+                    ),
+                    final=True
+                )
+                await event_queue.enqueue_event(status_update)
+            
+            return a2a_result
+            
+        except Exception as e:
+            logger.error(f"Error executing task management method {method}: {str(e)}", exc_info=True)
+            await self._send_error_update(event_queue, context, f"Error in {method}: {str(e)}")
+            raise
 

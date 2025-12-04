@@ -47,10 +47,10 @@ Returns a JSON object containing agent metadata:
   },
   "skills": [
     {
-      "id": "execute_task_tree",
+      "id": "tasks.execute",
       "name": "Execute Task Tree",
       "description": "Execute a complete task tree with multiple tasks",
-      "tags": ["task", "orchestration", "workflow"]
+      "tags": ["task", "orchestration", "workflow", "execution"]
     }
   ]
 }
@@ -84,10 +84,10 @@ curl http://localhost:8000/.well-known/agent-card
   },
   "skills": [
     {
-      "id": "execute_task_tree",
+      "id": "tasks.execute",
       "name": "Execute Task Tree",
       "description": "Execute a complete task tree with multiple tasks",
-      "tags": ["task", "orchestration", "workflow"]
+      "tags": ["task", "orchestration", "workflow", "execution"]
     }
   ]
 }
@@ -145,9 +145,23 @@ JSON-RPC 2.0 format:
 
 **Request Parameters:**
 - `jsonrpc` (string, required): JSON-RPC version, must be "2.0"
-- `method` (string, required): Method name, currently supports "execute_task_tree"
-- `params` (object, required): Method parameters
-  - `tasks` (array, required): Array of task objects to execute
+- `method` (string, required): Method name. Supports all task management operations:
+  - `tasks.execute` (recommended) or `execute_task_tree` (backward compatible): Execute a task tree
+  - `tasks.create`: Create new task(s)
+  - `tasks.get`: Get task by ID
+  - `tasks.update`: Update task
+  - `tasks.delete`: Delete task
+  - `tasks.detail`: Get full task details
+  - `tasks.tree`: Get task tree structure
+  - `tasks.list`: List tasks with filters
+  - `tasks.children`: Get child tasks
+  - `tasks.running.list`: List running tasks
+  - `tasks.running.status`: Get running task status
+  - `tasks.running.count`: Count running tasks
+  - `tasks.cancel`: Cancel running task(s)
+  - `tasks.copy`: Copy task tree
+- `params` (object, required): Method parameters (varies by method)
+  - For `tasks.execute` or `execute_task_tree`: `tasks` (array, required): Array of task objects to execute
 - `id` (string/number, required): Request identifier for matching responses
 - `configuration` (object, optional): Configuration for push notifications
   - `push_notification_config` (object, optional): Push notification settings
@@ -239,7 +253,7 @@ curl -X POST http://localhost:8000/ \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
-    "method": "execute_task_tree",
+    "method": "tasks.execute",
     "params": {
       "tasks": [
         {
@@ -261,7 +275,7 @@ curl -X POST http://localhost:8000/ \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
-    "method": "execute_task_tree",
+    "method": "tasks.execute",
     "params": {
       "tasks": [...]
     },
@@ -278,7 +292,7 @@ curl -X POST http://localhost:8000/ \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
-    "method": "execute_task_tree",
+    "method": "tasks.execute",
     "params": {
       "tasks": [...]
     },
@@ -296,8 +310,11 @@ curl -X POST http://localhost:8000/ \
 
 **Notes:**
 - This endpoint implements the A2A Protocol standard
+- All task management operations (CRUD, query, execution, cancellation, copy) are now fully supported through the A2A Protocol `/` route
+- Method naming: Use `tasks.execute` (recommended) or `execute_task_tree` (backward compatible) for task execution
 - When `push_notification_config` is provided, the server executes tasks asynchronously and sends updates to the callback URL
 - When `metadata.stream` is true, progress updates are sent via EventQueue (SSE/WebSocket). For JSON-RPC `tasks.execute`, use `use_streaming=true` instead.
+- All task management methods return A2A Protocol Task objects with real-time status updates via `TaskStatusUpdateEvent`
 - Task execution follows dependency order and priority scheduling
 - All tasks in a tree must have the same `user_id` (or be accessible by the authenticated user)
 - All responses include `protocol: "a2a"` in Task metadata and event data to identify this as an A2A Protocol response

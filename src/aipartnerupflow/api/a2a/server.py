@@ -17,6 +17,7 @@ from a2a.types import (
 )
 from aipartnerupflow.api.a2a.agent_executor import AIPartnerUpFlowAgentExecutor
 from aipartnerupflow.api.a2a.custom_starlette_app import CustomA2AStarletteApplication
+from aipartnerupflow.api.routes.tasks import TaskRoutes
 from aipartnerupflow.core.storage.sqlalchemy.models import TaskModel
 from aipartnerupflow.core.config import get_task_model_class
 from aipartnerupflow.core.utils.logger import get_logger
@@ -33,14 +34,149 @@ def load_skills() -> list[AgentSkill]:
     """
     skills = []
     
-    # Add main task execution skill
+    # Task execution skill
     skills.append(
         AgentSkill(
-            id="execute_task_tree",
+            id="tasks.execute",
             name="Execute Task Tree",
             description="Execute a complete task tree with multiple tasks",
-            tags=["task", "orchestration", "workflow"],
+            tags=["task", "orchestration", "workflow", "execution"],
             examples=["execute task tree", "run tasks", "process task hierarchy"],
+        )
+    )
+    
+    # Task CRUD operations
+    skills.append(
+        AgentSkill(
+            id="tasks.create",
+            name="Create Task",
+            description="Create a new task or task tree",
+            tags=["task", "create", "crud"],
+            examples=["create task", "create task tree", "add task"],
+        )
+    )
+    
+    skills.append(
+        AgentSkill(
+            id="tasks.get",
+            name="Get Task",
+            description="Get a task by ID",
+            tags=["task", "get", "crud", "read"],
+            examples=["get task", "retrieve task", "fetch task"],
+        )
+    )
+    
+    skills.append(
+        AgentSkill(
+            id="tasks.update",
+            name="Update Task",
+            description="Update an existing task",
+            tags=["task", "update", "crud", "modify"],
+            examples=["update task", "modify task", "edit task"],
+        )
+    )
+    
+    skills.append(
+        AgentSkill(
+            id="tasks.delete",
+            name="Delete Task",
+            description="Delete a task and its children (if all are pending)",
+            tags=["task", "delete", "crud", "remove"],
+            examples=["delete task", "remove task", "drop task"],
+        )
+    )
+    
+    # Task query operations
+    skills.append(
+        AgentSkill(
+            id="tasks.detail",
+            name="Get Task Detail",
+            description="Get full task details including all fields",
+            tags=["task", "detail", "query", "read"],
+            examples=["get task detail", "task details", "full task info"],
+        )
+    )
+    
+    skills.append(
+        AgentSkill(
+            id="tasks.tree",
+            name="Get Task Tree",
+            description="Get task tree structure with nested children",
+            tags=["task", "tree", "query", "hierarchy"],
+            examples=["get task tree", "task hierarchy", "task structure"],
+        )
+    )
+    
+    skills.append(
+        AgentSkill(
+            id="tasks.list",
+            name="List Tasks",
+            description="List all tasks with optional filters (user_id, status, root_only)",
+            tags=["task", "list", "query", "search"],
+            examples=["list tasks", "get all tasks", "search tasks"],
+        )
+    )
+    
+    skills.append(
+        AgentSkill(
+            id="tasks.children",
+            name="Get Task Children",
+            description="Get child tasks for a given parent task",
+            tags=["task", "children", "query", "hierarchy"],
+            examples=["get task children", "list children", "child tasks"],
+        )
+    )
+    
+    # Running task monitoring
+    skills.append(
+        AgentSkill(
+            id="tasks.running.list",
+            name="List Running Tasks",
+            description="List currently running tasks from memory",
+            tags=["task", "running", "monitoring", "status"],
+            examples=["list running tasks", "active tasks", "current tasks"],
+        )
+    )
+    
+    skills.append(
+        AgentSkill(
+            id="tasks.running.status",
+            name="Get Running Task Status",
+            description="Get status of multiple running tasks",
+            tags=["task", "running", "status", "monitoring"],
+            examples=["get task status", "check task status", "task status"],
+        )
+    )
+    
+    skills.append(
+        AgentSkill(
+            id="tasks.running.count",
+            name="Count Running Tasks",
+            description="Get count of running tasks by status",
+            tags=["task", "running", "count", "monitoring"],
+            examples=["count running tasks", "task count", "number of tasks"],
+        )
+    )
+    
+    # Task cancellation
+    skills.append(
+        AgentSkill(
+            id="tasks.cancel",
+            name="Cancel Task",
+            description="Cancel one or more running tasks",
+            tags=["task", "cancel", "stop", "control"],
+            examples=["cancel task", "stop task", "abort task"],
+        )
+    )
+    
+    # Task copy
+    skills.append(
+        AgentSkill(
+            id="tasks.copy",
+            name="Copy Task",
+            description="Create a copy of a task (optionally with children)",
+            tags=["task", "copy", "duplicate", "clone"],
+            examples=["copy task", "duplicate task", "clone task"],
         )
     )
     
@@ -60,14 +196,33 @@ push_sender = BasePushNotificationSender(
     config_store=push_config_store
 )
 
-def _create_request_handler():
+def _create_request_handler(verify_token_func=None, verify_permission_func=None):
     """
     Create request handler with agent executor
     
     Configuration (task_model_class, hooks) is automatically retrieved from
     the global config registry by AIPartnerUpFlowAgentExecutor.
+    
+    Args:
+        verify_token_func: Optional JWT verification function
+        verify_permission_func: Optional permission verification function
     """
-    agent_executor = AIPartnerUpFlowAgentExecutor()
+    # Get task_model_class from registry
+    task_model_class = get_task_model_class()
+    
+    # Create TaskRoutes instance for the adapter
+    task_routes = TaskRoutes(
+        task_model_class=task_model_class,
+        verify_token_func=verify_token_func,
+        verify_permission_func=verify_permission_func
+    )
+    
+    # Create agent executor with TaskRoutes
+    agent_executor = AIPartnerUpFlowAgentExecutor(
+        task_routes=task_routes,
+        verify_token_func=verify_token_func
+    )
+    
     return DefaultRequestHandler(
         agent_executor=agent_executor,
         task_store=InMemoryTaskStore(),
@@ -158,7 +313,12 @@ def create_a2a_server(
         All decorators are available from: from aipartnerupflow import ...
     """
     # Create request handler (reads from config registry)
-    request_handler = _create_request_handler()
+    # Note: verify_permission_func is not available at this level, will be None
+    # Permission checking will be handled at the middleware level
+    request_handler = _create_request_handler(
+        verify_token_func=verify_token_func,
+        verify_permission_func=None
+    )
 
     # Create agent card
     public_agent_card = AgentCard(
