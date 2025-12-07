@@ -19,7 +19,7 @@ import warnings
 import uvicorn
 import time
 from typing import Optional, Any
-
+from aipartnerupflow import __version__
 from aipartnerupflow.core.utils.helpers import get_url_with_host_and_port
 from aipartnerupflow.core.utils.logger import get_logger
 
@@ -362,7 +362,7 @@ def _create_mcp_server(
     app = FastAPI(
         title="aipartnerupflow MCP Server",
         description="Model Context Protocol server for task orchestration",
-        version="0.4.0"
+        version=__version__
     )
     
     # Create MCP server instance

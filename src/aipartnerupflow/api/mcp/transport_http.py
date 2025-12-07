@@ -6,6 +6,7 @@ Handles MCP protocol communication via HTTP with Server-Sent Events support.
 
 import json
 from typing import Dict, Any, Optional, Callable
+from aipartnerupflow import __version__
 try:
     from starlette.requests import Request
     from starlette.responses import JSONResponse, StreamingResponse
@@ -147,7 +148,7 @@ class HttpTransport:
                     },
                     "serverInfo": {
                         "name": "aipartnerupflow",
-                        "version": "0.4.0"
+                        "version": __version__
                     }
                 }
             }

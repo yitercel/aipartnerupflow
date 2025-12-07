@@ -8,6 +8,7 @@ import sys
 import json
 import asyncio
 from typing import Dict, Any, Optional, Callable
+from aipartnerupflow import __version__
 from aipartnerupflow.core.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -116,7 +117,7 @@ class StdioTransport:
                     },
                     "serverInfo": {
                         "name": "aipartnerupflow",
-                        "version": "0.4.0"
+                        "version": __version__
                     }
                 }
             }

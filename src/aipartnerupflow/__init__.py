@@ -19,7 +19,7 @@ Optional extensions (require extras):
 Protocol Standard: A2A (Agent-to-Agent) Protocol
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 # Core framework - re-export from core module for convenience
 from aipartnerupflow.core import (
