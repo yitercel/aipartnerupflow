@@ -3,7 +3,7 @@ Integration tests for generate executor
 """
 
 import pytest
-from aipartnerupflow import TaskManager, create_session
+from aipartnerupflow import TaskManager
 from aipartnerupflow.core.types import TaskTreeNode
 from aipartnerupflow.extensions.generate import GenerateExecutor
 
@@ -26,15 +26,14 @@ async def test_generate_executor_registration():
 
 
 @pytest.mark.asyncio
-async def test_generate_executor_with_task_manager():
+async def test_generate_executor_with_task_manager(sync_db_session):
     """Test using GenerateExecutor through TaskManager"""
     # Skip if no LLM API key configured (integration test)
     import os
     if not os.getenv("OPENAI_API_KEY") and not os.getenv("ANTHROPIC_API_KEY"):
         pytest.skip("No LLM API key configured")
     
-    db = create_session()
-    task_manager = TaskManager(db)
+    task_manager = TaskManager(sync_db_session)
     
     # Import to register executor
     from aipartnerupflow.extensions.generate import GenerateExecutor
@@ -46,7 +45,8 @@ async def test_generate_executor_with_task_manager():
         inputs={
             "requirement": "Create a simple task that gets system info",
             "user_id": "test_user"
-        }
+        },
+        schemas={"method": "generate_executor"}
     )
     
     # Execute

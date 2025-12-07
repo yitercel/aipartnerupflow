@@ -221,9 +221,26 @@ class TaskCreator:
             # user_id is optional (can be None) - get directly from task_data
             task_user_id = task_data.get("user_id")
             
+            # Check if provided_id already exists in database
+            # If it exists, generate a new UUID to avoid primary key conflict
+            actual_id = provided_id
+            if provided_id:
+                existing_task = await self.task_manager.task_repository.get_task_by_id(provided_id)
+                if existing_task:
+                    # ID already exists, generate new UUID
+                    import uuid
+                    actual_id = str(uuid.uuid4())
+                    logger.warning(
+                        f"Task ID '{provided_id}' already exists in database. "
+                        f"Generating new ID '{actual_id}' to avoid conflict."
+                    )
+                    # Update the task_data to use the new ID for internal reference tracking
+                    # Note: We'll still use provided_id for identifier_to_task mapping
+                    # but create the task with actual_id
+            
             # Create task (parent_id and dependencies will be set in step 4)
-            # Pass id if provided (as optional parameter)
-            logger.debug(f"Creating task: name={task_name}, provided_id={provided_id}")
+            # Use actual_id (may be different from provided_id if conflict detected)
+            logger.debug(f"Creating task: name={task_name}, provided_id={provided_id}, actual_id={actual_id}")
             task = await self.task_manager.task_repository.create_task(
                 name=task_name,
                 user_id=task_user_id,
@@ -233,20 +250,22 @@ class TaskCreator:
                 inputs=task_data.get("inputs"),
                 schemas=task_data.get("schemas"),
                 params=task_data.get("params"),
-                id=provided_id  # Optional: if None, TaskModel will auto-generate
+                id=actual_id  # Use actual_id (may be auto-generated if provided_id conflicts)
             )
             
-            logger.debug(f"Task created: id={task.id}, name={task.name}, provided_id={provided_id}")
+            logger.debug(f"Task created: id={task.id}, name={task.name}, provided_id={provided_id}, actual_id={actual_id}")
             
-            # Verify the task was created with the correct ID
-            if provided_id and task.id != provided_id:
+            # Verify the task was created with the expected ID
+            # If actual_id was generated due to conflict, task.id should match actual_id (not provided_id)
+            expected_id = actual_id if actual_id else provided_id
+            if expected_id and task.id != expected_id:
                 logger.error(
-                    f"Task ID mismatch: expected {provided_id}, got {task.id}. "
+                    f"Task ID mismatch: expected {expected_id}, got {task.id}. "
                     f"This indicates an issue with ID assignment."
                 )
                 raise ValueError(
-                    f"Task ID mismatch: expected {provided_id}, got {task.id}. "
-                    f"Task was not created with the specified ID."
+                    f"Task ID mismatch: expected {expected_id}, got {task.id}. "
+                    f"Task was not created with the expected ID."
                 )
             
             # Note: TaskRepository.create_task already commits and refreshes the task

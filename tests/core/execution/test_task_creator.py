@@ -219,7 +219,7 @@ class TestTaskCreator:
     
     @pytest.mark.asyncio
     async def test_error_duplicate_id(self, sync_db_session):
-        """Test error when duplicate id is provided"""
+        """Test error when duplicate id is provided in the same array"""
         creator = TaskCreator(sync_db_session)
         
         tasks = [
@@ -229,7 +229,7 @@ class TestTaskCreator:
                 "user_id": "user_123",
             },
             {
-                "id": "task_1",  # Duplicate id
+                "id": "task_1",  # Duplicate id in same array
                 "name": "Task 2",
                 "user_id": "user_123",
             }
@@ -237,6 +237,56 @@ class TestTaskCreator:
         
         with pytest.raises(ValueError, match="Duplicate task id"):
             await creator.create_task_tree_from_array(tasks)
+    
+    @pytest.mark.asyncio
+    async def test_auto_generate_id_when_exists_in_db(self, sync_db_session):
+        """Test that new UUID is generated when provided ID already exists in database"""
+        creator = TaskCreator(sync_db_session)
+        
+        # First, create a task with a specific ID
+        from aipartnerupflow.core.storage.sqlalchemy.task_repository import TaskRepository
+        from aipartnerupflow.core.config import get_task_model_class
+        repo = TaskRepository(sync_db_session, task_model_class=get_task_model_class())
+        existing_task = await repo.create_task(
+            name="Existing Task",
+            user_id="user_123",
+            id="task_1"
+        )
+        assert existing_task.id == "task_1"
+        
+        # Now try to create a new task tree with the same ID
+        # System should auto-generate a new UUID to avoid conflict
+        tasks = [
+            {
+                "id": "task_1",  # This ID already exists in DB
+                "name": "New Task 1",
+                "user_id": "user_123",
+            },
+            {
+                "id": "task_2",
+                "name": "New Task 2",
+                "user_id": "user_123",
+                "parent_id": "task_1",  # References task_1
+            }
+        ]
+        
+        task_tree = await creator.create_task_tree_from_array(tasks)
+        
+        # Verify that the new task has a different ID (auto-generated UUID)
+        assert task_tree.task.name == "New Task 1"
+        assert task_tree.task.id != "task_1"  # Should be a new UUID
+        assert len(task_tree.task.id) == 36  # UUID format
+        
+        # Verify that the existing task in DB still has the original ID
+        existing_task_refreshed = await repo.get_task_by_id("task_1")
+        assert existing_task_refreshed is not None
+        assert existing_task_refreshed.name == "Existing Task"
+        
+        # Verify parent_id reference still works (using provided_id for mapping)
+        assert len(task_tree.children) == 1
+        child_task = task_tree.children[0].task
+        assert child_task.name == "New Task 2"
+        assert child_task.parent_id == task_tree.task.id  # Should reference the new UUID
     
     @pytest.mark.asyncio
     async def test_error_duplicate_name_without_id(self, sync_db_session):
