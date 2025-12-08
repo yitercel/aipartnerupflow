@@ -956,7 +956,7 @@ class TestHandleTaskGenerate:
                 "requirement": "Fetch data from API",
                 "user_id": "test_user",
                 "llm_provider": "openai",
-                "llm_model": "gpt-4o",
+                "model": "gpt-4o",
                 "temperature": 0.8,
                 "max_tokens": 5000
             }
@@ -993,7 +993,7 @@ class TestHandleTaskGenerate:
             assert create_call is not None
             inputs = create_call[1]["inputs"]
             assert inputs["llm_provider"] == "openai"
-            assert inputs["llm_model"] == "gpt-4o"
+            assert inputs["model"] == "gpt-4o"
             assert inputs["temperature"] == 0.8
             assert inputs["max_tokens"] == 5000
     

@@ -83,6 +83,12 @@ class CrewManager(BaseTask):
         self.is_sub_crew = is_sub_crew
         self.llm: Optional[str] = None
         
+        # Get model from kwargs if provided (from schemas or params)
+        model = kwargs.get("model")
+        if model:
+            self.llm = model
+            logger.debug(f"CrewManager initialized with model from kwargs: {model}")
+        
         # Process works parameter (required)
         if not works:
             raise ValueError("works parameter is required")

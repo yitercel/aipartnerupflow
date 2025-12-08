@@ -1356,7 +1356,7 @@ pip install anthropic
         "requirement": "Fetch data from API, process it, and save to database",
         "user_id": "user123",
         "llm_provider": "openai",  # Optional: "openai" or "anthropic"
-        "llm_model": "gpt-4",  # Optional: model name
+        "model": "gpt-4",  # Optional: model name
         "temperature": 0.7,  # Optional: LLM temperature
         "max_tokens": 4000  # Optional: maximum tokens
     }

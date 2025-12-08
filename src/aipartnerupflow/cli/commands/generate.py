@@ -118,7 +118,7 @@ def task_tree(
                     "requirement": requirement,
                     "user_id": user_id,
                     "llm_provider": provider,
-                    "llm_model": model,
+                    "model": model,
                     "temperature": temperature,
                     "max_tokens": max_tokens,
                 },

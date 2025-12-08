@@ -64,7 +64,7 @@ class GenerateExecutor(BaseTask):
                 - requirement: Natural language requirement (required)
                 - user_id: User ID for generated tasks (optional)
                 - llm_provider: LLM provider ("openai" or "anthropic", optional)
-                - llm_model: Model name (optional)
+                - model: Model name (optional)
                 - temperature: LLM temperature (optional, default 0.7)
                 - max_tokens: Maximum tokens (optional, default 4000)
         
@@ -85,7 +85,7 @@ class GenerateExecutor(BaseTask):
             
             user_id = inputs.get("user_id")
             llm_provider = inputs.get("llm_provider")
-            llm_model = inputs.get("llm_model")
+            model = inputs.get("model")
             temperature = inputs.get("temperature", 0.7)
             max_tokens = inputs.get("max_tokens", 4000)
             
@@ -93,7 +93,7 @@ class GenerateExecutor(BaseTask):
             try:
                 llm_client = create_llm_client(
                     provider=llm_provider,
-                    model=llm_model
+                    model=model
                 )
             except Exception as e:
                 logger.error(f"Failed to create LLM client: {e}")
@@ -531,7 +531,7 @@ class GenerateExecutor(BaseTask):
                     "enum": ["openai", "anthropic"],
                     "description": "LLM provider to use (defaults to OPENAI_API_KEY or AIPARTNERUPFLOW_LLM_PROVIDER env var)"
                 },
-                "llm_model": {
+                "model": {
                     "type": "string",
                     "description": "LLM model name (optional, uses provider default)"
                 },

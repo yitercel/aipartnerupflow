@@ -246,7 +246,7 @@ class TestGenerateCommand:
                     assert captured_inputs.get("requirement") == "Test requirement"
                     assert captured_inputs.get("user_id") == "test_user"
                     assert captured_inputs.get("llm_provider") == "openai"
-                    assert captured_inputs.get("llm_model") == "gpt-4o"
+                    assert captured_inputs.get("model") == "gpt-4o"
                     assert captured_inputs.get("temperature") == 0.9
                     assert captured_inputs.get("max_tokens") == 6000
     

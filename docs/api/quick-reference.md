@@ -472,7 +472,7 @@ generate_task = await task_manager.task_repository.create_task(
         "requirement": "Fetch data from API, process it, and save to database",
         "user_id": "user123",
         "llm_provider": "openai",  # Optional
-        "llm_model": "gpt-4o"  # Optional
+        "model": "gpt-4o"  # Optional
     }
 )
 

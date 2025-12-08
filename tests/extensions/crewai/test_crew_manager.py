@@ -219,6 +219,53 @@ class TestCrewManager:
                 assert "llm" in call_args.kwargs
                 assert call_args.kwargs["llm"] == mock_llm_instance
     
+    @pytest.mark.skipif(CrewManager is None or LLM is None, reason="CrewManager or LLM not available")
+    def test_model_from_kwargs(self):
+        """Test CrewManager receives model from kwargs (from schemas)"""
+        with patch('aipartnerupflow.extensions.crewai.crew_manager.Agent') as mock_agent_class, \
+             patch('aipartnerupflow.extensions.crewai.crew_manager.Task') as mock_task_class, \
+             patch('aipartnerupflow.extensions.crewai.crew_manager.CrewAI') as mock_crew_class, \
+             patch('aipartnerupflow.extensions.crewai.crew_manager.LLM') as mock_llm_class:
+            
+            mock_agent = Mock()
+            mock_task = Mock()
+            mock_crew = Mock()
+            mock_llm_instance = Mock()
+            
+            mock_agent_class.return_value = mock_agent
+            mock_task_class.return_value = mock_task
+            mock_crew_class.return_value = mock_crew
+            mock_llm_class.return_value = mock_llm_instance
+            
+            # Create CrewManager with model from kwargs (simulating schemas["model"])
+            crew_manager = CrewManager(
+                name="Test Crew",
+                works={
+                    "agents": {
+                        "researcher": {
+                            "role": "Researcher",
+                            "goal": "Research",
+                            "backstory": "You are a researcher"
+                        }
+                    },
+                    "tasks": {
+                        "research_task": {
+                            "description": "Research a topic",
+                            "expected_output": "A summary",
+                            "agent": "researcher"
+                        }
+                    }
+                },
+                model="openai/gpt-4o"  # Model from schemas
+            )
+            
+            # Verify model was set to self.llm
+            assert crew_manager.llm == "openai/gpt-4o"
+            
+            # Verify LLM was called with the model name in _initialize_crew
+            # (This happens during __init__, so we check the call was made)
+            mock_llm_class.assert_called_with(model="openai/gpt-4o")
+    
     @pytest.mark.skipif(CrewManager is None or resolve_tool is None, reason="CrewManager or resolve_tool not available")
     def test_tools_string_conversion(self):
         """Test that string tool names are converted to callable objects"""

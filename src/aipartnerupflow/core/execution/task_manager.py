@@ -1076,6 +1076,11 @@ class TaskManager:
         if input_schema:
             init_params["inputs_schema"] = input_schema
         
+        # Get model from schemas to pass to executor (for CrewAI executors)
+        model = schemas.get("model")
+        if model:
+            init_params["model"] = model
+        
         # Inject LLM API key if needed (for CrewAI executors)
         # Priority: request header > user config
         # Note: CrewAI/LiteLLM automatically reads provider-specific API keys from environment,

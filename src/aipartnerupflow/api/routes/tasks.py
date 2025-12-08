@@ -1601,7 +1601,7 @@ class TaskRoutes(BaseRouteHandler):
             requirement: Natural language requirement for the task tree (required)
             user_id: Optional user ID for the generated tasks (default: authenticated user or None)
             llm_provider: Optional LLM provider ("openai" or "anthropic", default: from env or "openai")
-            llm_model: Optional LLM model name (default: from env or provider default)
+            model: Optional LLM model name (default: from env or provider default)
             temperature: Optional LLM temperature (default: 0.7)
             max_tokens: Optional maximum tokens for LLM response (default: 4000)
             save: Optional boolean, if True, save generated tasks to database (default: False)
@@ -1648,7 +1648,7 @@ class TaskRoutes(BaseRouteHandler):
             
             # Get LLM configuration
             llm_provider = params.get("llm_provider")
-            llm_model = params.get("llm_model")
+            model = params.get("model")
             temperature = params.get("temperature")
             max_tokens = params.get("max_tokens")
             
@@ -1664,7 +1664,7 @@ class TaskRoutes(BaseRouteHandler):
                     "requirement": requirement,
                     "user_id": user_id,
                     "llm_provider": llm_provider,
-                    "llm_model": llm_model,
+                    "model": model,
                     "temperature": temperature,
                     "max_tokens": max_tokens,
                 },

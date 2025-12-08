@@ -5,7 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] 
+
+### Changed
+- **LLM Model Parameter Naming**: Unified LLM model parameter naming to `model` across all components
+  - **Breaking Change**: `llm_model` parameter in `generate_executor` has been renamed to `model`
+    - GenerateExecutor: `inputs["llm_model"]` → `inputs["model"]`
+    - API Routes: `params["llm_model"]` → `params["model"]`
+    - CLI: `--model` parameter remains unchanged (internal mapping updated)
+  - **New Feature**: Support for `schemas["model"]` configuration for CrewAI executor
+    - Model configuration can now be specified in task schemas and will be passed to CrewManager
+    - Priority: `schemas["model"]` > `params.works.agents[].llm` (CrewAI standard)
+  - **Impact**: Only affects generate functionality introduced in 0.5.0, minimal breaking change
+  - **Migration**: Update any code using `llm_model` parameter to use `model` instead
+
+
 ## [0.5.0] 2025-12-7
+
 ### Added
 
 - **Extended Executor Framework with Mainstream Execution Methods**
