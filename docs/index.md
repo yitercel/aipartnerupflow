@@ -2,6 +2,48 @@
 
 Welcome to the aipartnerupflow documentation! This is your complete guide to building task orchestration workflows.
 
+## Problems We Solve
+
+You might be struggling with these common challenges:
+
+- **Managing Complex Task Dependencies**: Manually tracking which tasks depend on others, ensuring proper execution order, and handling failures across complex workflows becomes a nightmare. You end up writing custom coordination code, dealing with race conditions, and spending weeks debugging dependency issues.
+
+- **Integrating Multiple Execution Methods**: You need to call HTTP APIs, execute SSH commands, run Docker containers, communicate via gRPC, and coordinate AI agents—but each requires different libraries, error handling, and integration patterns. Managing multiple orchestration systems becomes overwhelming.
+
+- **Combining Traditional Tasks with AI Agents**: You want to add AI capabilities to existing workflows, but most solutions force you to choose: either traditional task execution OR AI agents. You're stuck with all-or-nothing decisions, requiring complete rewrites to introduce AI gradually.
+
+- **State Persistence and Recovery**: When workflows fail or get interrupted, you lose progress. Implementing retry logic, checkpointing, and state recovery requires significant custom development. You spend more time building infrastructure than solving business problems.
+
+- **Real-time Monitoring**: You need to show progress to users, but building real-time monitoring with polling, WebSocket connections, or custom streaming solutions takes weeks. Your users wait without feedback, and you struggle to debug long-running workflows.
+
+## Why aipartnerupflow?
+
+Here's what makes aipartnerupflow the right choice:
+
+- **One Unified Interface for Everything**: Stop managing multiple orchestration systems. One framework handles traditional tasks, HTTP/REST APIs, SSH commands, Docker containers, gRPC services, WebSocket communication, MCP tools, and AI agents—all through the same ExecutableTask interface.
+
+- **Start Simple, Scale Up Gradually**: Begin with a lightweight, dependency-free core that handles traditional task orchestration. Add AI capabilities, A2A server, CLI tools, or PostgreSQL storage only when you need them. Unlike frameworks that force you to install everything upfront, aipartnerupflow lets you start minimal and grow incrementally.
+
+- **Language-Agnostic Protocol**: Built on the AI Partner Up Flow Protocol, ensuring interoperability across Python, Go, Rust, JavaScript, and more. Different language implementations work together seamlessly.
+
+- **Production-Ready from Day One**: Built-in storage (DuckDB or PostgreSQL), real-time streaming, automatic retries, state persistence, and comprehensive monitoring—all included. No need to build these from scratch.
+
+- **Extensive Executor Ecosystem**: Choose from HTTP/REST APIs (with authentication), SSH remote execution, Docker containers, gRPC services, WebSocket communication, MCP integration, and LLM-based task tree generation.
+
+## What Happens When You Use aipartnerupflow?
+
+- **You Build Workflows Faster**: Before: Weeks of custom coordination code. After: Define task trees with dependencies in days, not weeks. The framework handles coordination, error recovery, and state management automatically.
+
+- **You Integrate Everything Easily**: Before: Multiple orchestration systems for different execution methods. After: One unified interface for all execution methods. Mix HTTP calls, SSH commands, Docker containers, and AI agents in a single workflow seamlessly.
+
+- **You Add AI Gradually**: Before: All-or-nothing decisions requiring complete rewrites. After: Start with traditional task orchestration, then add AI agents incrementally when ready. No rewrites needed.
+
+- **You Monitor in Real-Time**: Before: Weeks building custom polling or streaming solutions. After: Built-in real-time streaming via A2A Protocol. Monitor progress, task status, and intermediate results instantly.
+
+- **You Recover from Failures Automatically**: Before: Manual recovery logic and lost progress. After: Automatic retries with exponential backoff, state persistence, and workflow resumption from checkpoints.
+
+- **You Scale with Confidence**: Before: Worrying about resource usage and dependency management at scale. After: Production-ready from day one. Handle hundreds of concurrent workflows with confidence.
+
 ## 🚀 New to aipartnerupflow?
 
 **Start here if you're new:**

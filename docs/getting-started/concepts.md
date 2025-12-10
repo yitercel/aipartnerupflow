@@ -2,6 +2,27 @@
 
 Understanding these core concepts will help you use aipartnerupflow effectively. Don't worry - we'll explain everything in simple terms!
 
+## Why These Concepts Matter
+
+Before diving into the technical details, let's understand why these concepts exist and what problems they solve:
+
+**The Problem**: When building applications, you often need to coordinate multiple operations that depend on each other. For example:
+- Fetch data from an API, then process it, then save it
+- Run multiple tasks in parallel, but wait for all to complete before proceeding
+- Handle failures gracefully and retry automatically
+- Track progress and state across long-running operations
+
+**Without a framework**, you'd write custom code to:
+- Manually coordinate task execution order
+- Handle dependencies and wait conditions
+- Implement retry logic and error recovery
+- Track state and progress
+- Manage different execution methods (HTTP, SSH, Docker, etc.)
+
+**With aipartnerupflow**, these concepts provide a unified way to solve all these problems. The framework handles the complexity, so you can focus on your business logic.
+
+Now let's learn the core concepts that make this possible!
+
 ## What is a Task?
 
 A **task** is a unit of work that needs to be executed. Think of it like a function call, but with additional features like status tracking, dependencies, and persistence.
