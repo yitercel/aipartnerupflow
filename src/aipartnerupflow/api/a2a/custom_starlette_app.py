@@ -286,8 +286,39 @@ class CustomA2AStarletteApplication(A2AStarletteApplication):
             f"TaskModel: {self.task_model_class.__name__})"
         )
     
+        # Initialize _built_app to None (will be set when build() is called)
+        self._built_app = None
+    
+    def __call__(self, scope, receive, send):
+        """
+        ASGI callable - automatically calls build() if needed
+        
+        This allows CustomA2AStarletteApplication to be used directly as an ASGI app
+        without requiring an explicit build() call.
+        
+        Args:
+            scope: ASGI scope
+            receive: ASGI receive callable
+            send: ASGI send callable
+        """
+        if self._built_app is None:
+            self._built_app = self.build()
+        return self._built_app(scope, receive, send)
+    
     def build(self):
-        """Build the Starlette app with optional JWT authentication middleware and system routes"""
+        """
+        Build the Starlette app with optional JWT authentication middleware and system routes
+        
+        This method caches the built app, so subsequent calls return the same instance.
+        Can be called explicitly, or will be called automatically when used as ASGI app.
+        
+        Returns:
+            Built Starlette application instance
+        """
+        # Return cached app if already built
+        if self._built_app is not None:
+            return self._built_app
+        
         app = super().build()
         
         # Add CORS middleware (should be added before other middleware)
@@ -327,7 +358,9 @@ class CustomA2AStarletteApplication(A2AStarletteApplication):
         else:
             logger.info("JWT authentication is disabled")
         
-        return app
+        # Cache the built app
+        self._built_app = app
+        return self._built_app
     
     def routes(
         self,
