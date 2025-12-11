@@ -3,7 +3,7 @@ A2A server implementation for aipartnerupflow
 """
 
 import httpx
-from typing import Optional, Type
+from typing import Optional, Type, Dict, Any
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import (
     InMemoryTaskStore,
@@ -15,6 +15,8 @@ from a2a.types import (
     AgentCard,
     AgentSkill,
 )
+from jose import JWTError, jwt
+from datetime import datetime, timedelta, timezone
 from aipartnerupflow.api.a2a.agent_executor import AIPartnerUpFlowAgentExecutor
 from aipartnerupflow.api.a2a.custom_starlette_app import CustomA2AStarletteApplication
 from aipartnerupflow.api.routes.tasks import TaskRoutes
@@ -266,16 +268,44 @@ def verify_token(token: str, secret_key: Optional[str], algorithm: str = "HS256"
         return None
     
     try:
-        from jose import JWTError, jwt
         payload = jwt.decode(token, secret_key, algorithms=[algorithm])
         return payload
     except JWTError as e:
         logger.error(f"Error verifying JWT token: {e}")
         return None
-    except ImportError:
-        logger.error("python-jose not installed. Install it with: pip install python-jose[cryptography]")
+    except Exception as e:
+        logger.error(f"Exception verifying JWT token: {e}")
         return None
 
+
+def generate_token(payload: Dict[str, Any], secret_key: str, algorithm: str = "HS256", expires_in_days: int = 30) -> str:
+    """
+    Generate JWT token for user
+    
+    Uses PyJWT to generate tokens.
+    
+    Args:
+        user_id: User ID (from browser fingerprint or cookie)
+        expires_in_days: Token expiration in days (default: 365 days / 1 year)
+        
+    Returns:
+        JWT token string
+    """
+
+    # Create payload
+    now = datetime.now(timezone.utc)
+    payload.update({
+        "iat": int(now.timestamp()),  # Issued at
+        "exp": int((now + timedelta(days=expires_in_days)).timestamp()),  # Expiration
+    })
+    
+    try:
+        token = jwt.encode(payload, secret_key, algorithm=algorithm)
+        return token
+    except JWTError as e:
+        raise ValueError(f"Error generating JWT token: {e}")
+    except Exception as e:
+        raise
 
 def create_a2a_server(
     verify_token_func=None,

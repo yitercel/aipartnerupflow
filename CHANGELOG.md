@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] 2025-12-11
+
+### Added
+- **JWT Token Generation Support**
+  - New `generate_token()` function in `aipartnerupflow.api.a2a.server` for generating JWT tokens
+  - Supports custom payload, secret key, algorithm (default: HS256), and expiration (default: 30 days)
+  - Uses `python-jose[cryptography]` for token generation and verification
+  - Complements existing `verify_token()` function for complete JWT token lifecycle management
+  - Usage: `from aipartnerupflow.api.a2a.server import generate_token; token = generate_token({"user_id": "user123"}, secret_key)`
+
+- **Cookie-based JWT Authentication**
+  - Support for JWT token extraction from `request.cookies.get("Authorization")` in addition to Authorization header
+  - Priority: Authorization header is checked first, then falls back to cookie if header is not present
+  - Enables cookie-based authentication for web applications and browser-based clients
+  - Maintains security: Only JWT tokens are trusted (no fallback to HTTP headers for user identification)
+  - Updated `_extract_user_id_from_request()` method in `BaseRouteHandler` to support both header and cookie sources
+
+- **Dependency Updates**
+  - Added `python-jose[cryptography]>=3.3.0` to `[a2a]` optional dependencies in `pyproject.toml`
+  - Required for JWT token generation and verification functionality
+
+
 ## [0.6.0] 2025-12-10
 
 ### Added

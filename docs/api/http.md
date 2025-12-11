@@ -518,8 +518,11 @@ JSON-RPC 2.0 format with method-specific parameters:
 
 **Request Headers:**
 - `Content-Type`: `application/json` (required)
-- `Authorization`: `Bearer <token>` (optional, if JWT is enabled)
+- `Authorization`: `Bearer <token>` (optional, if JWT is enabled, priority over cookie)
 - `X-LLM-API-KEY`: `<api-key>` or `<provider>:<api-key>` (optional, for LLM tasks)
+
+**Request Cookies (Alternative to Header):**
+- `Authorization`: `<token>` (optional, if JWT is enabled, fallback if header not present)
 
 **Response Format:**  
 JSON-RPC 2.0 response format. The `result` field varies by method.
@@ -2329,26 +2332,51 @@ None
 The API supports optional JWT authentication. To enable:
 
 1. Set environment variable `AIPARTNERUPFLOW_JWT_SECRET_KEY`
-2. Include JWT token in request headers: `Authorization: Bearer <token>`
+2. Include JWT token in request headers or cookies
+
+**Token Sources (Priority Order):**
+1. **Authorization Header** (highest priority): `Authorization: Bearer <token>`
+2. **Cookie** (fallback): `Authorization` cookie containing the token
 
 **Token Format:**
 ```
+# Header format
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# Cookie format (alternative)
+Cookie: Authorization=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ```
 
 **Token Payload:**
 ```json
 {
   "user_id": "user123",
+  "sub": "user123",  // Standard JWT claim (used if user_id not present)
   "roles": ["admin"],
   "exp": 1234567890
 }
 ```
 
+**Token Generation:**
+You can generate JWT tokens using the `generate_token()` function:
+
+```python
+from aipartnerupflow.api.a2a.server import generate_token
+
+# Generate token with user_id
+payload = {"user_id": "user123", "roles": ["admin"]}
+secret_key = "your-secret-key"
+token = generate_token(payload, secret_key, expires_in_days=30)
+
+# Use token in requests
+headers = {"Authorization": f"Bearer {token}"}
+```
+
 **Permission Checking:**
 - If `roles` contains `"admin"`, user can access any task
 - Otherwise, user can only access tasks with matching `user_id`
-- If no `user_id` in token, permission checking is skipped
+- If no `user_id` in token, the `sub` field is used as fallback
+- If no `user_id` or `sub` in token, permission checking is skipped
 
 ## LLM API Key Headers
 
@@ -2750,18 +2778,35 @@ app = create_a2a_server(
 The custom application supports optional JWT authentication via middleware:
 
 ```python
-from aipartnerupflow.api.a2a.server import create_a2a_server
+from aipartnerupflow.api.a2a.server import create_a2a_server, generate_token, verify_token
 
-def verify_token(token: str) -> Optional[dict]:
+# Generate JWT token
+payload = {"user_id": "user123", "roles": ["admin"]}
+secret_key = "your-secret-key"
+token = generate_token(payload, secret_key, expires_in_days=30)
+
+# Verify JWT token (built-in function)
+def verify_token_func(token: str) -> Optional[dict]:
+    """JWT token verification using built-in function"""
+    return verify_token(token, secret_key)
+
+# Or use custom verification
+def custom_verify_token(token: str) -> Optional[dict]:
     """Custom JWT token verification function"""
     # Your token verification logic
     return payload if valid else None
 
 app = create_a2a_server(
-    verify_token_func=verify_token,
+    verify_token_func=verify_token_func,  # or custom_verify_token
+    verify_token_secret_key=secret_key,  # Optional: for built-in verification
     enable_system_routes=True
 )
 ```
+
+**Token Sources:**
+- JWT tokens can be provided via `Authorization: Bearer <token>` header (priority)
+- Or via `Authorization` cookie (fallback)
+- Both methods are supported for flexible authentication scenarios
 
 ## A2A Protocol Features
 

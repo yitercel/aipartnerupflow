@@ -81,7 +81,7 @@ class JWTAuthenticationMiddleware(BaseHTTPMiddleware):
         self.verify_token_func = verify_token_func
     
     async def dispatch(self, request: Request, call_next):
-        """Verify JWT token from Authorization header"""
+        """Verify JWT token from Authorization header or cookie"""
         
         # Skip authentication for public endpoints
         if request.url.path in self.PUBLIC_ENDPOINTS:
@@ -91,11 +91,28 @@ class JWTAuthenticationMiddleware(BaseHTTPMiddleware):
         if not self.verify_token_func:
             return await call_next(request)
         
-        # Check for Authorization header
+        # Try to get token from Authorization header first (priority)
         authorization = request.headers.get("Authorization")
+        token = None
         
-        if not authorization:
-            logger.warning(f"Missing Authorization header for {request.url.path}")
+        if authorization:
+            # Extract token from Bearer <token>
+            if authorization.startswith("Bearer "):
+                token = authorization[7:]  # Remove "Bearer " prefix
+            else:
+                token = authorization
+        else:
+            # Fallback: try to get token from cookie (for cookie-based auth)
+            # Support multiple cookie names for flexibility
+            token = (
+                request.cookies.get("Authorization")
+                or request.cookies.get("demo_jwt_token")  # Demo server cookie
+                or request.cookies.get("jwt_token")
+                or request.cookies.get("auth_token")
+            )
+        
+        if not token:
+            logger.warning(f"Missing Authorization header or cookie for {request.url.path}")
             return JSONResponse(
                 status_code=401,
                 content={
@@ -103,15 +120,10 @@ class JWTAuthenticationMiddleware(BaseHTTPMiddleware):
                     "error": {
                         "code": -32001,
                         "message": "Unauthorized",
-                        "data": "Missing Authorization header"
+                        "data": "Missing Authorization header or cookie"
                     }
                 }
             )
-        
-        token = authorization
-        # Extract token from Bearer <token>
-        if authorization.startswith("Bearer "):
-            token = authorization[7:]  # Remove "Bearer " prefix
         
         # Verify token
         try:

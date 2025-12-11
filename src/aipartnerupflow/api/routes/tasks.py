@@ -541,11 +541,16 @@ class TaskRoutes(BaseRouteHandler):
             if user_id:
                 self._check_permission(request, user_id, "list tasks for")
             else:
-                # No user_id specified, use authenticated user_id or None
+                # No user_id specified
                 authenticated_user_id, _ = self._get_user_info(request)
                 if authenticated_user_id:
-                    user_id = authenticated_user_id
-                # If no JWT and no user_id, user_id remains None (list all tasks)
+                    if self._is_admin(request):
+                        # Admin: allow querying all tasks
+                        user_id = None
+                    else:
+                        # Regular user: only query their own tasks
+                        user_id = authenticated_user_id
+                # If no JWT and no user_id, user_id remains None (list all tasks, backward compatibility)
 
             # Get running tasks from memory using TaskExecutor
             from aipartnerupflow.core.execution.task_executor import TaskExecutor
@@ -611,11 +616,16 @@ class TaskRoutes(BaseRouteHandler):
             if user_id:
                 self._check_permission(request, user_id, "list tasks for")
             else:
-                # No user_id specified, use authenticated user_id or None
+                # No user_id specified
                 authenticated_user_id, _ = self._get_user_info(request)
                 if authenticated_user_id:
-                    user_id = authenticated_user_id
-                # If no JWT and no user_id, user_id remains None (list all tasks)
+                    if self._is_admin(request):
+                        # Admin: allow querying all tasks
+                        user_id = None
+                    else:
+                        # Regular user: only query their own tasks
+                        user_id = authenticated_user_id
+                # If no JWT and no user_id, user_id remains None (list all tasks, backward compatibility)
 
             # Get database session and create repository
             db_session = get_default_session()
@@ -843,11 +853,16 @@ class TaskRoutes(BaseRouteHandler):
             if user_id:
                 self._check_permission(request, user_id, "count tasks for")
             else:
-                # No user_id specified, use authenticated user_id or None
+                # No user_id specified
                 authenticated_user_id, _ = self._get_user_info(request)
                 if authenticated_user_id:
-                    user_id = authenticated_user_id
-                # If no JWT and no user_id, user_id remains None (count all tasks)
+                    if self._is_admin(request):
+                        # Admin: allow querying all tasks
+                        user_id = None
+                    else:
+                        # Regular user: only query their own tasks
+                        user_id = authenticated_user_id
+                # If no JWT and no user_id, user_id remains None (count all tasks, backward compatibility)
 
             # Get running tasks count from memory using TaskExecutor
             from aipartnerupflow.core.execution.task_executor import TaskExecutor

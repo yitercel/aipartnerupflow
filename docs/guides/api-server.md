@@ -259,20 +259,34 @@ console.log(result);
 
 ### JWT Authentication (Optional)
 
-If authentication is enabled:
+The API supports JWT authentication via headers or cookies. You can generate tokens using the `generate_token()` function:
+
+```python
+from aipartnerupflow.api.a2a.server import generate_token
+
+# Generate JWT token
+payload = {"user_id": "user123", "roles": ["admin"]}
+secret_key = "your-secret-key"
+token = generate_token(payload, secret_key, expires_in_days=30)
+```
+
+**Using Token in Requests:**
 
 ```bash
-# Get token
-curl -X POST http://localhost:8000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username": "user", "password": "pass"}'
-
-# Use token
+# Method 1: Authorization header (recommended)
 curl -X POST http://localhost:8000/ \
   -H "Authorization: Bearer {token}" \
   -H "Content-Type: application/json" \
   -d '{...}'
+
+# Method 2: Cookie (for browser-based clients)
+curl -X POST http://localhost:8000/ \
+  -H "Cookie: Authorization={token}" \
+  -H "Content-Type: application/json" \
+  -d '{...}'
 ```
+
+**Note:** Authorization header takes priority over cookie if both are present.
 
 ## LLM API Key Management
 
