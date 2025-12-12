@@ -76,6 +76,12 @@ def _is_package_installed(package_name: str) -> bool:
     For standard library packages, this function tries to import them directly.
     For third-party packages, it checks installed distributions.
 
+    This function handles various import-related errors, including:
+    - ImportError: Package not installed
+    - ModuleNotFoundError: Package not found (Python 3.6+)
+    - AttributeError: Dependency chain version incompatibility (e.g., pycares/aiodns)
+    - Other exceptions: Unexpected errors during import
+
     Args:
         package_name: Package name to check (e.g., "crewai", "httpx", "os")
 
@@ -86,9 +92,31 @@ def _is_package_installed(package_name: str) -> bool:
     try:
         __import__(package_name)
         return True
-    except ImportError:
+    except (ImportError, ModuleNotFoundError):
         # If direct import fails, check installed distributions
         # This handles cases where package name differs from import name
+        pass
+    except (AttributeError, TypeError, ValueError) as e:
+        # Handle dependency chain errors:
+        # - AttributeError: Version incompatibility in dependency chain
+        #   (e.g., pycares 5.0.0 removed ares_query_a_result, breaking aiodns)
+        # - TypeError/ValueError: Other dependency-related errors
+        # Log the issue but continue to check installed distributions
+        # The package may be installed but not importable due to dependency issues
+        logger.debug(
+            f"Package {package_name} has dependency issues during import: {e}. "
+            f"Will check installed distributions."
+        )
+        # Continue to check installed distributions below
+        pass
+    except Exception as e:
+        # Catch-all for any other unexpected errors during import
+        # This is defensive programming - we don't want package detection to crash
+        logger.debug(
+            f"Unexpected error importing package {package_name}: {e}. "
+            f"Will check installed distributions."
+        )
+        # Continue to check installed distributions below
         pass
 
     # Check installed distributions for third-party packages
