@@ -3,7 +3,7 @@ Test main.py API functions: initialize_extensions and create_app_by_protocol
 """
 import os
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch, MagicMock, AsyncMock
 from aipartnerupflow.api.main import (
     initialize_extensions,
     create_app_by_protocol,

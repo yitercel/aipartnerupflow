@@ -29,7 +29,17 @@ except ImportError:
     pass  # Extension not available, tests will handle this
 
 try:
-    from aipartnerupflow.extensions.crewai import CrewManager  # noqa: F401
+    from aipartnerupflow.extensions.crewai import CrewManager, BatchManager  # noqa: F401
+except ImportError:
+    pass  # Extension not available, tests will handle this
+
+try:
+    from aipartnerupflow.extensions.core import AggregateResultsExecutor  # noqa: F401
+except ImportError:
+    pass  # Extension not available, tests will handle this
+
+try:
+    from aipartnerupflow.extensions.generate import GenerateExecutor  # noqa: F401
 except ImportError:
     pass  # Extension not available, tests will handle this
 
@@ -293,6 +303,86 @@ def reset_storage_singleton():
     reset_default_session()
     yield
     reset_default_session()
+
+
+@pytest.fixture(autouse=True)
+def ensure_executors_registered():
+    """
+    Ensure all required executors are registered before each test
+    
+    This fixture ensures that executors are registered even if previous tests
+    cleared the ExtensionRegistry. This is necessary because ExtensionRegistry
+    is a singleton and some tests (like test_main.py) clear it in setup_method.
+    
+    The fixture explicitly re-registers executors using override=True to ensure
+    they are available even if registry was cleared by previous tests.
+    """
+    from aipartnerupflow.core.extensions import get_registry
+    from aipartnerupflow.core.extensions.types import ExtensionCategory
+    
+    registry = get_registry()
+    
+    # Helper function to register executor if not already registered
+    def ensure_registered(executor_class, executor_id: str):
+        """Register executor if not already registered"""
+        if not registry.is_registered(executor_id):
+            try:
+                # Try to create a template instance
+                try:
+                    template = executor_class(inputs={})
+                except Exception:
+                    # If instantiation fails, create minimal template
+                    class TemplateClass(executor_class):
+                        def __init__(self):
+                            pass
+                    template = TemplateClass()
+                    template.id = getattr(executor_class, 'id', executor_id)
+                    template.name = getattr(executor_class, 'name', executor_class.__name__)
+                    template.description = getattr(executor_class, 'description', '')
+                    template.category = ExtensionCategory.EXECUTOR
+                    template.type = getattr(executor_class, 'type', 'default')
+                
+                # Register with override=True to force re-registration
+                registry.register(
+                    extension=template,
+                    executor_class=executor_class,
+                    override=True
+                )
+            except Exception:
+                # Ignore registration errors - some executors may not be available
+                pass
+    
+    # Ensure all required executors are registered
+    try:
+        from aipartnerupflow.extensions.stdio import SystemInfoExecutor, CommandExecutor
+        ensure_registered(SystemInfoExecutor, "system_info_executor")
+        ensure_registered(CommandExecutor, "command_executor")
+    except ImportError:
+        pass
+    
+    try:
+        from aipartnerupflow.extensions.crewai import CrewManager, BatchManager
+        ensure_registered(CrewManager, "crewai_executor")
+        ensure_registered(BatchManager, "batch_crewai_executor")
+    except ImportError:
+        pass
+    
+    try:
+        from aipartnerupflow.extensions.core import AggregateResultsExecutor
+        ensure_registered(AggregateResultsExecutor, "aggregate_results_executor")
+    except ImportError:
+        pass
+    
+    try:
+        from aipartnerupflow.extensions.generate import GenerateExecutor
+        ensure_registered(GenerateExecutor, "generate_executor")
+    except ImportError:
+        pass
+    
+    yield
+    
+    # No cleanup needed - registry state persists between tests
+    # (which is the desired behavior for most tests)
 
 
 @pytest.fixture(scope="function")

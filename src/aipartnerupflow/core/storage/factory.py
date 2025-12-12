@@ -32,21 +32,14 @@ def _get_default_db_path() -> str:
     if env_path:
         return env_path
     
-    # Check if examples module is available
-    try:
-        import aipartnerupflow.examples
-        # Examples module is available, use persistent database
-        # Default location: ~/.aipartnerup/data/aipartnerupflow.duckdb
-        home_dir = Path.home()
-        data_dir = home_dir / ".aipartnerup" / "data"
-        data_dir.mkdir(parents=True, exist_ok=True)
-        db_path = str(data_dir / "aipartnerupflow.duckdb")
-        logger.info(f"Examples module detected, using persistent database: {db_path}")
-        return db_path
-    except ImportError:
-        # Examples module not available, use in-memory database
-        logger.debug("Examples module not available, using in-memory database")
-        return ":memory:"
+    # Examples module has been removed, use persistent database by default
+    # Default location: ~/.aipartnerup/data/aipartnerupflow.duckdb
+    home_dir = Path.home()
+    data_dir = home_dir / ".aipartnerup" / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    db_path = str(data_dir / "aipartnerupflow.duckdb")
+    logger.debug(f"Using persistent database: {db_path}")
+    return db_path
 
 
 def create_session(

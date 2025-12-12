@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+- **Examples Module Deprecation**
+  - Removed `aipartnerupflow.examples` module from core library
+  - Removed `examples` CLI command (`aipartnerupflow examples init`)
+  - Removed `examples = []` optional dependency from `pyproject.toml`
+  - **Migration**: Demo task initialization has been moved to the **aipartnerupflow-demo** project
+  - Demo task definitions are now managed separately from the core library
+  - This keeps the core library focused on orchestration functionality
+  - For demo tasks, please use [aipartnerupflow-demo](https://github.com/aipartnerup/aipartnerupflow-demo)
+
+### Removed (continued)
+- **Examples API Methods**
+  - Removed `examples.init` and `examples.status` API methods from system routes
+  - These methods are no longer available in the API
+  - **Migration**: Use aipartnerupflow-demo for demo task initialization
+
+### Added
+- **Executor Metadata API**
+  - New `get_executor_metadata(executor_id)` function to query executor metadata
+  - New `validate_task_format(task, executor_id)` function to validate tasks against executor schemas
+  - New `get_all_executor_metadata()` function to get metadata for all executors
+  - Located in `aipartnerupflow.core.extensions.executor_metadata`
+  - Used by demo applications to generate accurate demo tasks
+  - Returns: id, name, description, input_schema, examples, tags
+
 ## [0.6.1] 2025-12-11
 
 ### Added

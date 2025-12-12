@@ -1054,13 +1054,15 @@ class TaskManager:
         task_type = schemas.get("type")  # Optional: only used if method is not an executor id
         task_method = schemas.get("method", "command")
         
-        logger.info(f"Executing task {task.id} with type={task_type}, method={task_method}")
-        
         # ============================================================
-        # 1. get executor id from params
+        # 1. get executor id from params (check this FIRST, before logging)
         # ============================================================
         params = task.params or {}
         executor_id = params.get("executor_id")
+        
+        # Log after we have executor_id info
+        logger.info(f"Executing task {task.id} with type={task_type}, method={task_method}, executor_id={executor_id}")
+        logger.debug(f"Task {task.id} params: {params}, executor_id from params: {executor_id}")
 
         # Get executor from unified extension registry
         registry = get_registry()
@@ -1077,7 +1079,7 @@ class TaskManager:
             extension = registry.get_by_id(executor_id)
             if extension and extension.category == ExtensionCategory.EXECUTOR:
                 extension_id = executor_id
-                logger.debug(f"Using executor_id '{executor_id}' from params/schemas")
+                logger.info(f"Using executor_id '{executor_id}' from params (task {task.id})")
         
         # If not found, try to use method as executor id
         if extension is None or (extension and extension.category != ExtensionCategory.EXECUTOR):

@@ -506,26 +506,19 @@ aipartnerupflow tasks copy task-123
 aipartnerupflow run flow --tasks '[{"id": "task-copy-xyz-789", ...}]'
 ```
 
-### Examples Data Management
+### Examples Data Management ⚠️ DEPRECATED
 
-Initialize example task data to help beginners get started. Examples demonstrate various features like task trees, dependencies, priorities, and different statuses.
+> **Note:** The `examples` command has been removed from aipartnerupflow core library.
+> 
+> **Migration:** For demo task initialization, please use the **aipartnerupflow-demo** project instead.
+> The aipartnerupflow-demo project provides:
+> - Complete demo tasks for all executors
+> - Per-user demo task initialization
+> - Demo task validation against executor schemas
+> 
+> See [aipartnerupflow-demo](https://github.com/aipartnerup/aipartnerupflow-demo) for more information.
 
-```bash
-# Initialize example tasks
-aipartnerupflow examples init
-
-# Force re-initialization (even if examples already exist)
-aipartnerupflow examples init --force
-```
-
-**What gets created:**
-- Tasks with different statuses (completed, failed, pending, in_progress)
-- Task trees with parent-child relationships
-- Tasks with different priorities
-- Tasks with dependencies
-- CrewAI task example (requires LLM key)
-
-**Note:** Examples are automatically initialized when the API server starts if the database is empty.
+The `aipartnerupflow examples init` command is no longer available. Demo task initialization has been moved to the separate aipartnerupflow-demo project to keep the core library focused on orchestration functionality.
 
 ### API Server Management
 

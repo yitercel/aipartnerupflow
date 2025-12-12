@@ -52,10 +52,6 @@ class SystemRoutes(BaseRouteHandler):
                 result = await self.handle_llm_key_get(params, request, request_id)
             elif method == "config.llm_key.delete":
                 result = await self.handle_llm_key_delete(params, request, request_id)
-            elif method == "examples.init":
-                result = await self.handle_examples_init(params, request, request_id)
-            elif method == "examples.status":
-                result = await self.handle_examples_status(params, request, request_id)
             else:
                 return JSONResponse(
                     status_code=400,
@@ -287,81 +283,3 @@ class SystemRoutes(BaseRouteHandler):
         except Exception as e:
             logger.error(f"Error deleting LLM key: {str(e)}", exc_info=True)
             raise
-
-    async def handle_examples_init(self, params: dict, request: Request, request_id: str) -> dict:
-        """
-        Handle examples initialization - initialize example data
-
-        Params:
-            force: Optional, if True, re-initialize even if examples already exist
-
-        Returns:
-            {"success": True, "created_count": int, "message": str}
-        """
-        try:
-            # Check if examples module is available
-            try:
-                from aipartnerupflow.examples.init import init_examples_data
-            except ImportError:
-                raise ValueError(
-                    "Examples module not available. "
-                    "Install with: pip install aipartnerupflow[examples] or pip install aipartnerupflow[all]"
-                )
-
-            force = params.get("force", False)
-
-            # Initialize examples data
-            created_count = await init_examples_data(force=force)
-
-            if created_count > 0:
-                message = f"Successfully initialized {created_count} example tasks"
-            else:
-                message = "Examples data already exists or initialization skipped"
-
-            logger.info(f"Examples initialization requested: {message}")
-            return {"success": True, "created_count": created_count, "message": message}
-
-        except Exception as e:
-            logger.error(f"Error initializing examples: {str(e)}", exc_info=True)
-            raise
-
-    async def handle_examples_status(self, params: dict, request: Request, request_id: str) -> dict:
-        """
-        Handle examples status check - check if examples are initialized
-
-        Returns:
-            {"initialized": bool, "available": bool, "message": str}
-        """
-        try:
-            # Check if examples module is available
-            try:
-                from aipartnerupflow.examples.init import check_if_examples_initialized
-
-                examples_available = True
-            except ImportError:
-                examples_available = False
-
-            if not examples_available:
-                return {
-                    "initialized": False,
-                    "available": False,
-                    "message": "Examples module not available. Install with: pip install aipartnerupflow[examples]",
-                }
-
-            # Check if examples are initialized
-            initialized = await check_if_examples_initialized()
-
-            if initialized:
-                message = "Examples data is initialized"
-            else:
-                message = "Examples data is not initialized. Call examples.init to initialize."
-
-            return {"initialized": initialized, "available": True, "message": message}
-
-        except Exception as e:
-            logger.error(f"Error checking examples status: {str(e)}", exc_info=True)
-            return {
-                "initialized": False,
-                "available": False,
-                "message": f"Error checking status: {str(e)}",
-            }

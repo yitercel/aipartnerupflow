@@ -12,7 +12,6 @@ Core modules (always included):
 
 Optional extensions (require extras):
 - extensions.crewai: CrewAI support [crewai]
-- examples: Example implementations [examples]
 - api: A2A Protocol Server [a2a] (A2A Protocol is the standard)
 - cli: CLI tools [cli]
 

@@ -23,6 +23,11 @@ from aipartnerupflow.core.extensions.decorators import (
     hook_register,
 )
 from aipartnerupflow.core.config import register_task_tree_hook, get_task_tree_hooks
+from aipartnerupflow.core.extensions.executor_metadata import (
+    get_executor_metadata,
+    validate_task_format,
+    get_all_executor_metadata,
+)
 
 __all__ = [
     "Extension",
@@ -38,5 +43,8 @@ __all__ = [
     "hook_register",
     "register_task_tree_hook",
     "get_task_tree_hooks",
+    "get_executor_metadata",
+    "validate_task_format",
+    "get_all_executor_metadata",
 ]
 

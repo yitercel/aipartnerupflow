@@ -2,89 +2,44 @@
 
 This page contains examples and use cases for aipartnerupflow.
 
-## Quick Start with Example Tasks
+## Demo Task Initialization
 
-The easiest way to get started is to use the built-in example tasks. These demonstrate various features like task trees, dependencies, priorities, and different statuses.
+> **Note:** The built-in examples module has been removed from aipartnerupflow core library.
+> For demo task initialization, please use the **aipartnerupflow-demo** project instead.
 
-### Initialize Example Tasks
+The **aipartnerupflow-demo** project provides:
+- Complete demo tasks for all executors
+- Per-user demo task initialization
+- Demo task validation against executor schemas
 
-```bash
-# Initialize example tasks in the database
-aipartnerupflow examples init
+For more information, see the [aipartnerupflow-demo](https://github.com/aipartnerup/aipartnerupflow-demo) repository.
 
-# Force re-initialization (even if examples already exist)
-aipartnerupflow examples init --force
+## Executor Metadata API
+
+aipartnerupflow provides utilities to query executor metadata for demo task generation:
+
+```python
+from aipartnerupflow.core.extensions import (
+    get_executor_metadata,
+    validate_task_format,
+    get_all_executor_metadata
+)
+
+# Get metadata for a specific executor
+metadata = get_executor_metadata("system_info_executor")
+# Returns: id, name, description, input_schema, examples, tags
+
+# Validate a task against executor schema
+task = {
+    "name": "CPU Analysis",
+    "schemas": {"method": "system_info_executor"},
+    "inputs": {"resource": "cpu"}
+}
+is_valid = validate_task_format(task, "system_info_executor")
+
+# Get metadata for all executors
+all_metadata = get_all_executor_metadata()
 ```
-
-**What gets created:**
-- Tasks with different statuses (completed, failed, pending, in_progress)
-- Task trees with parent-child relationships
-- Tasks with different priorities
-- Tasks with dependencies
-- CrewAI task example (requires LLM key)
-
-**Auto-initialization:**
-When the API server starts, it automatically initializes example tasks if the database is empty. This helps beginners get started quickly.
-
-### View Example Tasks
-
-After initialization, you can view the example tasks:
-
-```bash
-# List all tasks
-aipartnerupflow tasks list
-
-# Check specific task status
-aipartnerupflow tasks status example_root_001
-
-# View task tree
-aipartnerupflow tasks tree example_root_001
-```
-
-### Execute Example Tasks
-
-Example tasks are created in `pending` status, ready to be executed:
-
-```bash
-# Execute via CLI
-aipartnerupflow run flow --tasks '[{"id": "example_root_001", ...}]'
-
-# Or execute via API
-curl -X POST http://localhost:8000/tasks \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "tasks.create",
-    "params": {
-      "tasks": [{"id": "example_root_001", ...}]
-    }
-  }'
-```
-
-**Note:** For CrewAI example tasks, you'll need to provide an LLM API key:
-
-```bash
-# Via request header
-curl -X POST http://localhost:8000/tasks \
-  -H "X-LLM-API-KEY: openai:sk-your-key" \
-  -H "Content-Type: application/json" \
-  -d '{...}'
-```
-
-## Example Task Structure
-
-The example tasks demonstrate:
-
-1. **System Analysis Project** - A task tree with parent-child relationships:
-   - Root task: System Analysis Project
-   - Child tasks: CPU Analysis, Memory Analysis
-   - Dependent task: Disk Analysis (depends on CPU and Memory)
-
-2. **CrewAI Research Task** - Demonstrates CrewAI integration (requires LLM key)
-
-3. **Multi-Level Analysis** - A deeper task tree with multiple levels
-
-4. **Various Statuses** - Tasks in different states (pending, in_progress, etc.)
 
 ## Basic Examples
 

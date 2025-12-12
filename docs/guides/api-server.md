@@ -388,19 +388,15 @@ export ANTHROPIC_API_KEY="sk-ant-xxx"
 export GOOGLE_API_KEY="xxx"
 ```
 
-### Examples Auto-initialization
+### Examples Auto-initialization ⚠️ DEPRECATED
 
-When the API server starts, it automatically initializes example tasks if the database is empty. This helps beginners get started quickly.
+> **Note:** Examples auto-initialization has been removed from aipartnerupflow core library.
+> The `_auto_init_examples_if_needed()` function in `api/main.py` is now deprecated and does nothing.
+> 
+> **Migration:** For demo task initialization, please use the **aipartnerupflow-demo** project instead.
+> See [aipartnerupflow-demo](https://github.com/aipartnerup/aipartnerupflow-demo) for complete demo task management.
 
-To manually initialize examples:
-
-```bash
-# Via CLI
-aipartnerupflow examples init
-
-# Or force re-initialization
-aipartnerupflow examples init --force
-```
+The examples module and CLI command have been removed. The API server no longer auto-initializes examples on startup.
 
 ## Configuration
 

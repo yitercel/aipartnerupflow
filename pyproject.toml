@@ -71,8 +71,8 @@ crewai = [
 # Templates feature removed - not planned for implementation
 # templates = []
 
-# Examples data for beginners (demo tasks)
-examples = []
+# Examples feature removed - demo tasks moved to aipartnerupflow-demo project
+# examples = []  # Removed: use aipartnerupflow-demo for demo task initialization
 
 # LLM Key Configuration Management (multi-user support)
 llm-key-config = []
@@ -116,7 +116,7 @@ dev = [
 
 # Full installation (all features)
 all = [
-    "aipartnerupflow[crewai,a2a,cli,postgres,examples,llm-key-config,ssh,docker,grpc,mcp]",
+    "aipartnerupflow[crewai,a2a,cli,postgres,llm-key-config,ssh,docker,grpc,mcp]",
 ]
 
 [project.scripts]
