@@ -82,6 +82,12 @@ class JWTAuthenticationMiddleware(BaseHTTPMiddleware):
     
     async def dispatch(self, request: Request, call_next):
         """Verify JWT token from Authorization header or cookie"""
+
+        # Skip authentication for OPTIONS requests (CORS preflight)
+        # OPTIONS requests are sent by browsers automatically for CORS preflight
+        # They don't include credentials and should always be allowed
+        if request.method == "OPTIONS":
+            return await call_next(request)
         
         # Skip authentication for public endpoints
         if request.url.path in self.PUBLIC_ENDPOINTS:
