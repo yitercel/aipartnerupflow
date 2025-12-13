@@ -46,7 +46,7 @@ docs/_build/
 *.db
 *.duckdb
 *.sqlite
-
+.data/
 # Logs
 logs/
 *.log
