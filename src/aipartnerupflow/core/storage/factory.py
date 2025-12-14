@@ -61,7 +61,6 @@ def get_session_timeout() -> int:
         return 1800
 
 
-# UNUSED: Session pool code - kept for future use
 class SessionPoolManager:
     """
     Manages database session pool for concurrent task tree executions
@@ -817,7 +816,6 @@ def get_default_storage(*args, **kwargs):
     return get_default_session(*args, **kwargs)
 
 
-# UNUSED: Session pool code - kept for future use
 class TaskTreeSession:
     """
     Async context manager for task tree database sessions
@@ -920,7 +918,6 @@ class TaskTreeSession:
         return False  # Don't suppress exceptions
 
 
-# UNUSED: Session pool code - kept for future use
 def create_task_tree_session(
     connection_string: Optional[str] = None,
     **kwargs

@@ -9,6 +9,11 @@ from aipartnerupflow.core.storage.factory import (
     get_default_session,
     set_default_session,
     reset_default_session,
+    # Session pool functions
+    create_task_tree_session,
+    get_session_pool_manager,
+    reset_session_pool_manager,
+    SessionLimitExceeded,
     # Backward compatibility (deprecated)
     create_storage,
     get_default_storage,
@@ -19,6 +24,11 @@ __all__ = [
     "get_default_session",
     "set_default_session",
     "reset_default_session",
+    # Session pool functions
+    "create_task_tree_session",
+    "get_session_pool_manager",
+    "reset_session_pool_manager",
+    "SessionLimitExceeded",
     # Backward compatibility (deprecated)
     "create_storage",
     "get_default_storage",

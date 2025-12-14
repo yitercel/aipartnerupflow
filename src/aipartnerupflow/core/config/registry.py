@@ -61,16 +61,37 @@ class ConfigRegistry:
         Raises:
             TypeError: If task_model_class is not a subclass of TaskModel
         """
-        if task_model_class and not issubclass(task_model_class, TaskModel):
-            raise TypeError(
-                f"task_model_class must be a subclass of TaskModel, "
-                f"got {task_model_class}. "
-                f"Please ensure your custom class inherits from TaskModel:\n"
-                f"  from aipartnerupflow.core.storage.sqlalchemy.models import TaskModel\n"
-                f"  class MyTaskModel(TaskModel):\n"
-                f"      # Your custom fields here\n"
-                f"      pass"
-            )
+        if task_model_class:
+            # Check if task_model_class is a subclass of TaskModel
+            # Use MRO (Method Resolution Order) to handle cases where TaskModel might have been reloaded
+            is_subclass = False
+            try:
+                is_subclass = issubclass(task_model_class, TaskModel)
+            except TypeError:
+                # If issubclass fails (e.g., due to module reload), check MRO
+                is_subclass = False
+            
+            # If issubclass failed or returned False, check MRO for any TaskModel class
+            # This handles cases where TaskModel was reloaded and CustomTaskModel inherits from old TaskModel
+            if not is_subclass and hasattr(task_model_class, '__mro__'):
+                for base in task_model_class.__mro__:
+                    # Check if base is TaskModel (current) or has TaskModel name and correct module
+                    if (base is TaskModel or 
+                        (hasattr(base, '__name__') and base.__name__ == 'TaskModel' and 
+                         hasattr(base, '__module__') and 'aipartnerupflow.core.storage.sqlalchemy.models' in base.__module__)):
+                        is_subclass = True
+                        break
+            
+            if not is_subclass:
+                raise TypeError(
+                    f"task_model_class must be a subclass of TaskModel, "
+                    f"got {task_model_class}. "
+                    f"Please ensure your custom class inherits from TaskModel:\n"
+                    f"  from aipartnerupflow.core.storage.sqlalchemy.models import TaskModel\n"
+                    f"  class MyTaskModel(TaskModel):\n"
+                    f"      # Your custom fields here\n"
+                    f"      pass"
+                )
         self._task_model_class = task_model_class
         logger.debug(
             f"Set global task model class: "

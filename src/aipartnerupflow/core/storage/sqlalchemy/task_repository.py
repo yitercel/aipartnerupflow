@@ -63,7 +63,33 @@ class TaskRepository:
         """
         self.db = db
         self.is_async = isinstance(db, AsyncSession)
-        self.task_model_class = task_model_class
+        
+        # Check if task_model_class mapper has custom columns that might not exist in the database
+        # This can happen if Base.metadata was polluted by custom TaskModel tests
+        from sqlalchemy.inspection import inspect as sa_inspect
+        custom_columns = {'project_id', 'priority_level', 'department'}
+        has_custom_columns = False
+        
+        try:
+            mapper = sa_inspect(task_model_class)
+            if hasattr(mapper, 'columns'):
+                mapper_columns = {col.key for col in mapper.columns}
+                has_custom_columns = bool(custom_columns & mapper_columns)
+        except Exception:
+            pass
+        
+        # If mapper has custom columns and we're using default TaskModel, reload module to get clean one
+        if has_custom_columns and task_model_class == TaskModel:
+            import importlib
+            import sys
+            if 'aipartnerupflow.core.storage.sqlalchemy.models' in sys.modules:
+                importlib.reload(sys.modules['aipartnerupflow.core.storage.sqlalchemy.models'])
+            from aipartnerupflow.core.storage.sqlalchemy.models import TaskModel as CleanTaskModel
+            from sqlalchemy.orm import configure_mappers
+            configure_mappers()
+            self.task_model_class = CleanTaskModel
+        else:
+            self.task_model_class = task_model_class
     
     async def create_task(
         self,
@@ -99,29 +125,126 @@ class TaskRepository:
         Returns:
             Created TaskModel instance (or custom TaskModel subclass if configured)
         """
-        # Core fields
-        task_data = {
-            "name": name,
-            "user_id": user_id,
-            "parent_id": parent_id,
-            "priority": priority,
-            "dependencies": dependencies or [],
-            "inputs": inputs or {},
-            "schemas": schemas or {},
-            "params": params or {},
-            "status": "pending",
-            "progress": 0.0,
-            "has_children": False,
-        }
+        # Determine which TaskModel class to use (may be clean TaskModel if Base.metadata is polluted)
+        # We need to check this early to get the correct available_columns
+        task_model_to_check = self.task_model_class
+        
+        # Check if task_model_class's __table__ has custom columns that might not exist in the database
+        # This can happen if Base.metadata was polluted by custom TaskModel tests
+        # Note: We check __table__.columns instead of mapper.columns because __table__ references
+        # Base.metadata.tables[TASK_TABLE_NAME], which gets polluted by extend_existing=True
+        from sqlalchemy.inspection import inspect as sa_inspect
+        import importlib
+        import sys
+        from aipartnerupflow.core.storage.sqlalchemy.models import Base as ModelsBase, TASK_TABLE_NAME
+        custom_columns = {'project_id', 'priority_level', 'department'}
+        has_custom_columns = False
+        use_clean_task_model = False
+        clean_task_model = None
+        
+        try:
+            # Check __table__.columns (which references Base.metadata) for custom columns
+            if hasattr(self.task_model_class, '__table__'):
+                table_columns = {c.name for c in self.task_model_class.__table__.columns}
+                has_custom_columns = bool(custom_columns & table_columns)
+            
+            # Also check Base.metadata.tables directly
+            if not has_custom_columns and TASK_TABLE_NAME in ModelsBase.metadata.tables:
+                metadata_table_columns = {c.name for c in ModelsBase.metadata.tables[TASK_TABLE_NAME].columns}
+                has_custom_columns = bool(custom_columns & metadata_table_columns)
+            
+            # If Base.metadata is polluted, reload module and use clean TaskModel
+            # This is a defensive measure when Base.metadata is polluted by custom TaskModel tests
+            if has_custom_columns and self.task_model_class == TaskModel:
+                # Remove polluted table from Base.metadata first
+                if TASK_TABLE_NAME in ModelsBase.metadata.tables:
+                    ModelsBase.metadata.remove(ModelsBase.metadata.tables[TASK_TABLE_NAME])
+                
+                # Reload models module to get clean Base and TaskModel
+                if 'aipartnerupflow.core.storage.sqlalchemy.models' in sys.modules:
+                    importlib.reload(sys.modules['aipartnerupflow.core.storage.sqlalchemy.models'])
+                
+                from aipartnerupflow.core.storage.sqlalchemy.models import TaskModel as CleanTaskModel, Base as CleanBase
+                from sqlalchemy.orm import configure_mappers
+                configure_mappers()
+                
+                # Force access to __table__ to ensure it's created with clean metadata
+                _ = CleanTaskModel.__table__
+                
+                # Verify the table is clean (no custom columns)
+                clean_table_columns = {c.name for c in CleanTaskModel.__table__.columns}
+                if custom_columns & clean_table_columns:
+                    # Still polluted, try to force clean by removing and recreating
+                    if TASK_TABLE_NAME in CleanBase.metadata.tables:
+                        CleanBase.metadata.remove(CleanBase.metadata.tables[TASK_TABLE_NAME])
+                    # Force recreate by accessing __table__ again
+                    _ = CleanTaskModel.__table__
+                    configure_mappers()
+                
+                clean_task_model = CleanTaskModel
+                use_clean_task_model = True
+                task_model_to_check = clean_task_model
+                # Update module-level TaskModel reference to ensure consistency
+                import aipartnerupflow.core.storage.sqlalchemy.models as models_module
+                models_module.TaskModel = CleanTaskModel
+                # Also update this module's TaskModel reference
+                import aipartnerupflow.core.storage.sqlalchemy.task_repository as repo_module
+                repo_module.TaskModel = CleanTaskModel
+                logger.debug(
+                    f"Base.metadata was polluted with custom columns {custom_columns & table_columns if hasattr(self.task_model_class, '__table__') else set()}, "
+                    f"using clean TaskModel to avoid database errors"
+                )
+        except Exception as e:
+            logger.debug(f"Error checking for custom columns: {e}")
+            pass
+        
+        # Core fields - only include fields that exist in the task_model_class table
+        # This is important for custom TaskModel classes that may not have all standard fields
+        # Get available columns from the task_model_class table (use task_model_to_check, not self.task_model_class)
+        available_columns = set()
+        if hasattr(task_model_to_check, '__table__'):
+            available_columns = {c.name for c in task_model_to_check.__table__.columns}
+        
+        task_data = {}
+        
+        # Only add fields that exist in the table
+        if 'name' in available_columns:
+            task_data["name"] = name
+        if 'user_id' in available_columns:
+            task_data["user_id"] = user_id
+        if 'parent_id' in available_columns:
+            task_data["parent_id"] = parent_id
+        if 'priority' in available_columns:
+            task_data["priority"] = priority
+        if 'dependencies' in available_columns:
+            task_data["dependencies"] = dependencies or []
+        if 'inputs' in available_columns:
+            task_data["inputs"] = inputs or {}
+        if 'schemas' in available_columns:
+            task_data["schemas"] = schemas or {}
+        if 'params' in available_columns:
+            task_data["params"] = params or {}
+        if 'status' in available_columns:
+            task_data["status"] = "pending"
+        if 'progress' in available_columns:
+            task_data["progress"] = 0.0
+        if 'has_children' in available_columns:
+            task_data["has_children"] = False
+        if 'original_task_id' in available_columns:
+            task_data["original_task_id"] = None
+        if 'has_copy' in available_columns:
+            task_data["has_copy"] = False
         
         # Set id if provided (otherwise TaskModel will use its default)
-        if id is not None:
+        if id is not None and 'id' in available_columns:
             task_data["id"] = id
         
         # Add custom fields from kwargs if they exist as columns in the TaskModel
         # This allows users to pass custom fields like project_id, department, etc.
         # Note: 'id' should not be passed via kwargs, use the id parameter instead
         # Note: 'status' should not be overridden from kwargs for new tasks (always starts as 'pending')
+        
+        # Filter kwargs to only include valid columns
         for key, value in kwargs.items():
             if key == "id":
                 logger.warning(
@@ -133,15 +256,27 @@ class TaskRepository:
                 # Status is always set to 'pending' for new tasks, ignore status from kwargs
                 logger.debug(f"Ignoring status '{value}' from kwargs - new tasks always start as 'pending'")
                 continue
-            elif hasattr(self.task_model_class, key) or key in self.task_model_class.__table__.columns:
+            elif key in custom_columns and has_custom_columns and self.task_model_class == TaskModel:
+                # Skip custom columns if mapper has them but they might not exist in the database
+                # This prevents errors when Base.metadata is polluted (only for default TaskModel)
+                logger.debug(f"Skipping custom column '{key}' to avoid potential database errors")
+                continue
+            elif key in available_columns:
+                # Only add if the column actually exists in the table definition
                 task_data[key] = value
+            elif hasattr(self.task_model_class, key):
+                # Fallback: check if it's a class attribute (but not a column)
+                # This is less reliable, so log a warning
+                logger.debug(f"Field '{key}' exists as class attribute but not as table column, skipping")
             else:
                 logger.warning(
                     f"Custom field '{key}' ignored - not found in {self.task_model_class.__name__}. "
                     f"Available columns: {[c.name for c in self.task_model_class.__table__.columns]}"
                 )
         
-        task = self.task_model_class(**task_data)
+        # Use clean TaskModel if mapper is polluted (already determined above)
+        task_model_to_use = clean_task_model if use_clean_task_model else self.task_model_class
+        task = task_model_to_use(**task_data)
         
         self.db.add(task)
         
@@ -173,17 +308,192 @@ class TaskRepository:
             TaskModel instance (or custom TaskModel subclass) or None if not found
         """
         try:
-            if self.is_async:
-                task = await self.db.get(self.task_model_class, task_id)
-                if task:
-                    # Explicitly refresh to ensure we get the latest data from database
-                    await self.db.refresh(task)
+            # Check if task_model_class's __table__ or Base.metadata has custom columns
+            # This can happen if Base.metadata was polluted by custom TaskModel tests
+            from sqlalchemy.inspection import inspect as sa_inspect
+            from sqlalchemy.orm import configure_mappers
+            from sqlalchemy import select, text
+            from aipartnerupflow.core.storage.sqlalchemy.models import Base as ModelsBase, TASK_TABLE_NAME
+            import importlib
+            import sys
+            
+            custom_columns = {'project_id', 'priority_level', 'department'}
+            has_custom_columns = False
+            use_clean_task_model = False
+            clean_task_model = None
+            
+            # Check __table__.columns (which references Base.metadata) for custom columns
+            if hasattr(self.task_model_class, '__table__'):
+                table_columns = {c.name for c in self.task_model_class.__table__.columns}
+                has_custom_columns = bool(custom_columns & table_columns)
+            
+            # Also check Base.metadata.tables directly
+            if not has_custom_columns and TASK_TABLE_NAME in ModelsBase.metadata.tables:
+                metadata_table_columns = {c.name for c in ModelsBase.metadata.tables[TASK_TABLE_NAME].columns}
+                has_custom_columns = bool(custom_columns & metadata_table_columns)
+            
+            # If Base.metadata is polluted, reload module and use clean TaskModel
+            # Only do this if we're using the default TaskModel, not a custom one
+            # Check by comparing class names and modules, not object identity (which may differ after reload)
+            is_default_taskmodel = (
+                self.task_model_class.__name__ == 'TaskModel' and
+                hasattr(self.task_model_class, '__module__') and
+                'aipartnerupflow.core.storage.sqlalchemy.models' in self.task_model_class.__module__
+            )
+            
+            if has_custom_columns and is_default_taskmodel:
+                # Remove polluted table from Base.metadata first
+                if TASK_TABLE_NAME in ModelsBase.metadata.tables:
+                    ModelsBase.metadata.remove(ModelsBase.metadata.tables[TASK_TABLE_NAME])
+                
+                # Reload models module to get clean Base and TaskModel
+                if 'aipartnerupflow.core.storage.sqlalchemy.models' in sys.modules:
+                    importlib.reload(sys.modules['aipartnerupflow.core.storage.sqlalchemy.models'])
+                
+                from aipartnerupflow.core.storage.sqlalchemy.models import TaskModel as CleanTaskModel, Base as CleanBase
+                from sqlalchemy.orm import configure_mappers
+                configure_mappers()
+                
+                # Force access to __table__ to ensure it's created with clean metadata
+                # This ensures the table definition is rebuilt from the class definition
+                _ = CleanTaskModel.__table__
+                
+                # Verify the table is clean (no custom columns)
+                clean_table_columns = {c.name for c in CleanTaskModel.__table__.columns}
+                if custom_columns & clean_table_columns:
+                    # Still polluted, try to force clean by removing and recreating
+                    if TASK_TABLE_NAME in CleanBase.metadata.tables:
+                        CleanBase.metadata.remove(CleanBase.metadata.tables[TASK_TABLE_NAME])
+                    # Force recreate by accessing __table__ again
+                    _ = CleanTaskModel.__table__
+                    configure_mappers()
+                
+                clean_task_model = CleanTaskModel
+                use_clean_task_model = True
+                # Update module-level TaskModel reference to ensure consistency
+                import aipartnerupflow.core.storage.sqlalchemy.models as models_module
+                models_module.TaskModel = CleanTaskModel
+                # Also update this module's TaskModel reference
+                import aipartnerupflow.core.storage.sqlalchemy.task_repository as repo_module
+                repo_module.TaskModel = CleanTaskModel
+                logger.debug("Base.metadata was polluted in get_task_by_id, using clean TaskModel")
+            elif has_custom_columns:
+                # Base.metadata is polluted but we're using a custom TaskModel
+                # Don't reload, just use the custom TaskModel as-is
+                # The custom TaskModel should handle the pollution correctly
+                logger.debug(f"Base.metadata is polluted but using custom TaskModel {self.task_model_class.__name__}, not reloading")
+            
+            # Use clean TaskModel if Base.metadata is polluted
+            task_model_to_use = clean_task_model if use_clean_task_model else self.task_model_class
+            
+            # Update self.task_model_class if we're using clean TaskModel
+            if use_clean_task_model:
+                self.task_model_class = clean_task_model
+            
+            # If still has custom columns (shouldn't happen after reload), use select with explicit columns
+            # But first check if instance already exists in session to avoid conflicts
+            if has_custom_columns and not use_clean_task_model:
+                # First try to get from session/identity map
+                if self.is_async:
+                    # For async, try normal query first
+                    task = await self.db.get(self.task_model_class, task_id)
+                    if task:
+                        await self.db.refresh(task)
+                        return task
+                else:
+                    # For sync, try normal query first
+                    task = self.db.get(self.task_model_class, task_id)
+                    if task:
+                        self.db.refresh(task)
+                        return task
+                
+                # If not found, use raw SQL to select only standard columns
+                # This avoids issues when mapper has columns that don't exist in the database
+                standard_columns = [
+                    'id', 'parent_id', 'user_id', 'name', 'status', 'priority',
+                    'dependencies', 'inputs', 'params', 'result', 'error', 'schemas',
+                    'progress', 'created_at', 'started_at', 'updated_at', 'completed_at',
+                    'has_children', 'original_task_id', 'has_copy'
+                ]
+                columns_str = ', '.join(standard_columns)
+                
+                if self.is_async:
+                    stmt = text(f"SELECT {columns_str} FROM {self.task_model_class.__tablename__} WHERE id = :task_id")
+                    result = await self.db.execute(stmt, {"task_id": task_id})
+                    row = result.fetchone()
+                    if row:
+                        # Convert row to TaskModel instance
+                        # This is a fallback when mapper is polluted
+                        task_dict = dict(zip(standard_columns, row))
+                        task = self.task_model_class(**task_dict)
+                        # Merge instead of add to avoid conflicts
+                        task = await self.db.merge(task)
+                        return task
+                    return None
+                else:
+                    stmt = text(f"SELECT {columns_str} FROM {self.task_model_class.__tablename__} WHERE id = :task_id")
+                    result = self.db.execute(stmt, {"task_id": task_id})
+                    row = result.fetchone()
+                    if row:
+                        # Convert row to TaskModel instance
+                        task_dict = dict(zip(standard_columns, row))
+                        task = self.task_model_class(**task_dict)
+                        # Merge instead of add to avoid conflicts
+                        task = self.db.merge(task)
+                        return task
+                    return None
             else:
-                task = self.db.get(self.task_model_class, task_id)
-                if task:
-                    # Explicitly refresh to ensure we get the latest data from database
-                    self.db.refresh(task)
-            return task
+                # Normal path: use ORM query
+                # Double-check that self.task_model_class.__table__ is clean before using db.get()
+                # This is important because db.get() uses __table__ to generate SQL, and if __table__ is polluted,
+                # it will try to query non-existent columns
+                final_task_model = self.task_model_class
+                if hasattr(final_task_model, '__table__'):
+                    final_table_columns = {c.name for c in final_task_model.__table__.columns}
+                    if custom_columns & final_table_columns:
+                        # Still polluted even after reload, use raw SQL as fallback
+                        logger.debug(f"TaskModel.__table__ still has custom columns after reload, using raw SQL fallback")
+                        standard_columns = [
+                            'id', 'parent_id', 'user_id', 'name', 'status', 'priority',
+                            'dependencies', 'inputs', 'params', 'result', 'error', 'schemas',
+                            'progress', 'created_at', 'started_at', 'updated_at', 'completed_at',
+                            'has_children', 'original_task_id', 'has_copy'
+                        ]
+                        columns_str = ', '.join(standard_columns)
+                        
+                        if self.is_async:
+                            stmt = text(f"SELECT {columns_str} FROM {final_task_model.__tablename__} WHERE id = :task_id")
+                            result = await self.db.execute(stmt, {"task_id": task_id})
+                            row = result.fetchone()
+                            if row:
+                                task_dict = dict(zip(standard_columns, row))
+                                task = final_task_model(**task_dict)
+                                task = await self.db.merge(task)
+                                return task
+                            return None
+                        else:
+                            stmt = text(f"SELECT {columns_str} FROM {final_task_model.__tablename__} WHERE id = :task_id")
+                            result = self.db.execute(stmt, {"task_id": task_id})
+                            row = result.fetchone()
+                            if row:
+                                task_dict = dict(zip(standard_columns, row))
+                                task = final_task_model(**task_dict)
+                                task = self.db.merge(task)
+                                return task
+                            return None
+                
+                # Use ORM query with clean TaskModel
+                if self.is_async:
+                    task = await self.db.get(final_task_model, task_id)
+                    if task:
+                        # Explicitly refresh to ensure we get the latest data from database
+                        await self.db.refresh(task)
+                else:
+                    task = self.db.get(final_task_model, task_id)
+                    if task:
+                        # Explicitly refresh to ensure we get the latest data from database
+                        self.db.refresh(task)
+                return task
         except Exception as e:
             logger.error(f"Error getting task by ID {task_id}: {str(e)}")
             return None

@@ -769,7 +769,9 @@ class TaskManager:
             # It doesn't affect execute_after_task which handles internal dependency triggering
                 
         except Exception as e:
-            logger.error(f"Error executing task {task.id}: {str(e)}", exc_info=True)
+            # Handle case where task might be None
+            task_id_str = str(task.id) if task else "unknown"
+            logger.error(f"Error executing task {task_id_str}: {str(e)}", exc_info=True)
             
             # Update task status using repository
             await self.task_repository.update_task_status(
