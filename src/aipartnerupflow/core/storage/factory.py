@@ -2,12 +2,16 @@
 Database session factory for creating database sessions
 """
 
-from typing import Optional, Union
+from typing import Optional, Union, Dict, Any
 from pathlib import Path
 import os
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+import time
+import asyncio
+from contextlib import asynccontextmanager
+from threading import Lock
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker, AsyncEngine
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, Engine
 from aipartnerupflow.core.storage.sqlalchemy.models import Base
 from aipartnerupflow.core.storage.dialects.registry import get_dialect_config
 from aipartnerupflow.core.utils.logger import get_logger
@@ -16,6 +20,344 @@ logger = get_logger(__name__)
 
 # Global default session instance (lazy loading)
 _default_session: Optional[Union[Session, AsyncSession]] = None
+
+# Global session pool manager instance
+_session_pool_manager: Optional["SessionPoolManager"] = None
+_session_pool_lock = Lock()
+
+
+class SessionLimitExceeded(Exception):
+    """Exception raised when session limit is exceeded"""
+    pass
+
+
+def get_max_sessions() -> int:
+    """
+    Get maximum concurrent sessions limit
+    
+    Returns:
+        Maximum number of concurrent sessions (default: 50)
+    """
+    max_sessions = os.getenv("AIPARTNERUPFLOW_MAX_SESSIONS", "50")
+    try:
+        return int(max_sessions)
+    except ValueError:
+        logger.warning(f"Invalid AIPARTNERUPFLOW_MAX_SESSIONS value: {max_sessions}, using default 50")
+        return 50
+
+
+def get_session_timeout() -> int:
+    """
+    Get session timeout in seconds
+    
+    Returns:
+        Session timeout in seconds (default: 1800 = 30 minutes)
+    """
+    timeout = os.getenv("AIPARTNERUPFLOW_SESSION_TIMEOUT", "1800")
+    try:
+        return int(timeout)
+    except ValueError:
+        logger.warning(f"Invalid AIPARTNERUPFLOW_SESSION_TIMEOUT value: {timeout}, using default 1800")
+        return 1800
+
+
+# UNUSED: Session pool code - kept for future use
+class SessionPoolManager:
+    """
+    Manages database session pool for concurrent task tree executions
+    
+    Maintains a single engine per database configuration and provides
+    session factory for creating isolated sessions with limits.
+    """
+    
+    def __init__(self):
+        self._engine: Optional[Union[Engine, AsyncEngine]] = None
+        self._sessionmaker: Optional[Union[sessionmaker, async_sessionmaker]] = None
+        self._active_sessions: Dict[Union[Session, AsyncSession], float] = {}
+        self._lock = Lock()
+        self._max_sessions: int = get_max_sessions()
+        self._session_timeout: int = get_session_timeout()
+        self._connection_string: Optional[str] = None
+        self._path: Optional[str] = None
+        self._async_mode: Optional[bool] = None
+        self._engine_kwargs: Dict[str, Any] = {}
+        logger.info(f"SessionPoolManager initialized: max_sessions={self._max_sessions}, timeout={self._session_timeout}s")
+    
+    def _get_config_key(
+        self,
+        connection_string: Optional[str] = None,
+        path: Optional[Union[str, Path]] = None,
+        async_mode: Optional[bool] = None
+    ) -> str:
+        """Generate a unique key for database configuration"""
+        return f"{connection_string or ''}:{path or ''}:{async_mode}"
+    
+    def initialize(
+        self,
+        connection_string: Optional[str] = None,
+        path: Optional[Union[str, Path]] = None,
+        async_mode: Optional[bool] = None,
+        **kwargs
+    ) -> None:
+        """
+        Initialize the pool manager with database configuration
+        
+        Args:
+            connection_string: Database connection string
+            path: Database file path (DuckDB only)
+            async_mode: Whether to use async mode
+            **kwargs: Additional engine parameters
+        """
+        with self._lock:
+            if self._engine is not None:
+                # Already initialized, check if config matches
+                config_key = self._get_config_key(connection_string, path, async_mode)
+                current_key = self._get_config_key(self._connection_string, self._path, self._async_mode)
+                if config_key == current_key:
+                    logger.debug("SessionPoolManager already initialized with matching config")
+                    return
+                else:
+                    logger.warning(
+                        f"SessionPoolManager reinitializing with different config. "
+                        f"Old: {current_key}, New: {config_key}"
+                    )
+            
+            # Store configuration
+            self._connection_string = connection_string
+            self._path = str(path) if path else None
+            self._async_mode = async_mode
+            self._engine_kwargs = kwargs.copy()
+            
+            # Determine dialect and connection string
+            if connection_string is not None:
+                if is_postgresql_url(connection_string):
+                    dialect = "postgresql"
+                    if async_mode is None:
+                        async_mode = True
+                    connection_string = normalize_postgresql_url(connection_string, async_mode)
+                elif connection_string.startswith("duckdb://"):
+                    dialect = "duckdb"
+                    if async_mode is None:
+                        async_mode = False
+                    path = connection_string.replace("duckdb:///", "").replace("duckdb://", "")
+                    if path == "" or path == ":memory:":
+                        path = ":memory:"
+                    else:
+                        path = str(Path(path).absolute())
+                else:
+                    raise ValueError(
+                        f"Unsupported connection string format: {connection_string}. "
+                        f"Supported formats: postgresql://..., postgresql+asyncpg://..., duckdb://..."
+                    )
+            else:
+                dialect = "duckdb"
+                if async_mode is None:
+                    async_mode = False
+                if path is None:
+                    path = _get_default_db_path()
+                elif path != ":memory:":
+                    path = str(Path(path).absolute())
+            
+            try:
+                dialect_config = get_dialect_config(dialect)
+            except ValueError:
+                if dialect == "postgresql":
+                    logger.warning(
+                        "PostgreSQL not available (install with [postgres] extra), "
+                        "falling back to DuckDB"
+                    )
+                    dialect = "duckdb"
+                    dialect_config = get_dialect_config(dialect)
+                    if path is None:
+                        path = _get_default_db_path()
+                    connection_string = dialect_config.get_connection_string(path=path)
+                    async_mode = False
+                else:
+                    raise
+            
+            # Generate connection string if not provided
+            if connection_string is None:
+                if dialect == "duckdb":
+                    connection_string = dialect_config.get_connection_string(path=path)
+                else:
+                    raise ValueError("Connection string is required for PostgreSQL")
+            
+            # Get engine kwargs from dialect config and merge with user-provided kwargs
+            engine_kwargs = dialect_config.get_engine_kwargs()
+            engine_kwargs.update(kwargs)
+            self._engine_kwargs = engine_kwargs
+            
+            # Create engine and sessionmaker
+            if async_mode:
+                self._engine = create_async_engine(connection_string, **engine_kwargs)
+                self._sessionmaker = async_sessionmaker(
+                    self._engine, class_=AsyncSession, expire_on_commit=False
+                )
+            else:
+                self._engine = create_engine(connection_string, **engine_kwargs)
+                self._sessionmaker = sessionmaker(
+                    self._engine, class_=Session, expire_on_commit=False
+                )
+            
+            logger.info(f"SessionPoolManager initialized: {dialect} engine with pool")
+            
+            # Ensure tables exist
+            if self._engine:
+                try:
+                    if async_mode:
+                        # For async, tables will be created on first use
+                        logger.debug("Async engine created, tables will be created on first use")
+                    else:
+                        Base.metadata.create_all(self._engine)
+                except Exception as e:
+                    logger.warning(f"Could not create tables automatically: {str(e)}")
+    
+    def create_session(self) -> Union[Session, AsyncSession]:
+        """
+        Create a new session from the pool
+        
+        Returns:
+            New database session
+            
+        Raises:
+            SessionLimitExceeded: If maximum session limit is reached
+        """
+        with self._lock:
+            # Clean up expired sessions
+            self._cleanup_expired_sessions()
+            
+            # Check session limit
+            active_count = len(self._active_sessions)
+            if active_count >= self._max_sessions:
+                logger.warning(
+                    f"Session limit exceeded: {active_count}/{self._max_sessions} active sessions"
+                )
+                raise SessionLimitExceeded(
+                    f"Maximum session limit ({self._max_sessions}) exceeded. "
+                    f"Currently {active_count} active sessions. "
+                    f"Please wait for some sessions to complete."
+                )
+            
+            # Create new session
+            if self._sessionmaker is None:
+                raise RuntimeError(
+                    "SessionPoolManager not initialized. Call initialize() first or use get_session_pool_manager()"
+                )
+            
+            session = self._sessionmaker()
+            self._active_sessions[session] = time.time()
+            
+            logger.debug(f"Created session from pool: {len(self._active_sessions)}/{self._max_sessions} active")
+            return session
+    
+    def release_session(self, session: Union[Session, AsyncSession]) -> None:
+        """
+        Release a session back to the pool
+        
+        Args:
+            session: Session to release
+        """
+        with self._lock:
+            if session in self._active_sessions:
+                del self._active_sessions[session]
+                logger.debug(f"Released session: {len(self._active_sessions)}/{self._max_sessions} active")
+            
+            # Close session
+            try:
+                if isinstance(session, AsyncSession):
+                    # For async sessions, we need to close in async context
+                    # This will be handled by the context manager
+                    pass
+                else:
+                    session.close()
+            except Exception as e:
+                logger.warning(f"Error closing session: {str(e)}")
+    
+    def _cleanup_expired_sessions(self) -> None:
+        """Clean up sessions that have exceeded timeout"""
+        current_time = time.time()
+        expired_sessions = []
+        
+        for session, created_at in list(self._active_sessions.items()):
+            if current_time - created_at > self._session_timeout:
+                expired_sessions.append(session)
+        
+        for session in expired_sessions:
+            logger.warning(f"Closing expired session (timeout: {self._session_timeout}s)")
+            del self._active_sessions[session]
+            try:
+                if isinstance(session, AsyncSession):
+                    # Async session cleanup will be handled by context manager
+                    pass
+                else:
+                    session.close()
+            except Exception as e:
+                logger.warning(f"Error closing expired session: {str(e)}")
+    
+    def get_active_session_count(self) -> int:
+        """Get current number of active sessions"""
+        with self._lock:
+            return len(self._active_sessions)
+    
+    def get_max_sessions(self) -> int:
+        """Get maximum session limit"""
+        return self._max_sessions
+
+
+def get_session_pool_manager() -> SessionPoolManager:
+    """
+    Get or create the global session pool manager
+    
+    Returns:
+        SessionPoolManager instance
+    """
+    global _session_pool_manager
+    
+    if _session_pool_manager is None:
+        with _session_pool_lock:
+            if _session_pool_manager is None:
+                _session_pool_manager = SessionPoolManager()
+                # Initialize with default configuration
+                connection_string = _get_database_url_from_env()
+                _session_pool_manager.initialize(connection_string=connection_string)
+    
+    return _session_pool_manager
+
+
+def reset_session_pool_manager() -> None:
+    """
+    Reset the global session pool manager (for testing)
+    
+    This function allows tests to reset the session pool manager,
+    ensuring clean state between tests.
+    """
+    global _session_pool_manager
+    
+    with _session_pool_lock:
+        if _session_pool_manager is not None:
+            # Dispose engine if exists
+            if _session_pool_manager._engine is not None:
+                try:
+                    if isinstance(_session_pool_manager._engine, AsyncEngine):
+                        # For async engines, we can't dispose synchronously
+                        # The engine will be cleaned up when the process ends
+                        pass
+                    else:
+                        _session_pool_manager._engine.dispose()
+                except Exception as e:
+                    logger.warning(f"Error disposing session pool manager engine: {str(e)}")
+            
+            # Clear active sessions
+            _session_pool_manager._active_sessions.clear()
+            
+            # Reset state
+            _session_pool_manager._engine = None
+            _session_pool_manager._sessionmaker = None
+            _session_pool_manager._connection_string = None
+            _session_pool_manager._path = None
+            _session_pool_manager._async_mode = None
+        
+        _session_pool_manager = None
 
 
 def is_postgresql_url(url: str) -> bool:
@@ -289,6 +631,18 @@ def get_default_session(
     """
     Get default database session (singleton)
     
+    .. deprecated:: 
+        This function is deprecated for API route handlers. Use `get_request_session()` instead,
+        which is automatically provided by `DatabaseSessionMiddleware` for each request.
+        
+        For API routes:
+        - Use `get_request_session()` to get the request's isolated session (recommended)
+        - The session is automatically managed by middleware (commit/rollback/close)
+        
+        For CLI commands or library usage outside request context:
+        - This function is still available for backward compatibility
+        - Consider using `with_db_session_context()` for better session management
+    
     Supports both DuckDB (default) and PostgreSQL (via connection_string or DATABASE_URL environment variable).
     
     This function is designed for library usage - external projects can call this to set up database connection.
@@ -461,4 +815,138 @@ def get_default_storage(*args, **kwargs):
     """Deprecated: Use get_default_session instead"""
     logger.warning("get_default_storage() is deprecated, use get_default_session() instead")
     return get_default_session(*args, **kwargs)
+
+
+# UNUSED: Session pool code - kept for future use
+class TaskTreeSession:
+    """
+    Async context manager for task tree database sessions
+    
+    Automatically manages session lifecycle with pool limits and cleanup.
+    
+    Example:
+        async with TaskTreeSession() as session:
+            # Use session for task tree operations
+            task_manager = TaskManager(session)
+            await task_manager.distribute_task_tree(task_tree)
+    """
+    
+    def __init__(
+        self,
+        connection_string: Optional[str] = None,
+        **kwargs
+    ):
+        """
+        Initialize TaskTreeSession context manager
+        
+        Args:
+            connection_string: Database connection string (optional)
+                - If starts with "postgresql://" or "postgresql+" → PostgreSQL, async_mode=True
+                - If starts with "duckdb://" → DuckDB, extract path, async_mode=False
+                - If None → use default DuckDB path
+            **kwargs: Additional engine parameters
+        """
+        self._pool_manager: Optional[SessionPoolManager] = None
+        self._session: Optional[Union[Session, AsyncSession]] = None
+        self._connection_string = connection_string
+        
+        # Detect database type from connection_string
+        path: Optional[Union[str, Path]] = None
+        async_mode: Optional[bool] = None
+        
+        if connection_string is not None:
+            if is_postgresql_url(connection_string):
+                async_mode = True
+            elif connection_string.startswith("duckdb://"):
+                async_mode = False
+                path = connection_string.replace("duckdb:///", "").replace("duckdb://", "")
+                if path == "" or path == ":memory:":
+                    path = ":memory:"
+                else:
+                    path = str(Path(path).absolute())
+        else:
+            # Default to DuckDB
+            async_mode = False
+            path = _get_default_db_path()
+        
+        self._path = path
+        self._async_mode = async_mode
+        self._kwargs = kwargs
+    
+    async def __aenter__(self) -> Union[Session, AsyncSession]:
+        """Enter context manager and create session from pool"""
+        # Get or create pool manager
+        self._pool_manager = get_session_pool_manager()
+        
+        # Initialize pool manager if needed
+        if self._pool_manager._engine is None:
+            connection_string = self._connection_string
+            if connection_string is None:
+                connection_string = _get_database_url_from_env()
+            
+            self._pool_manager.initialize(
+                connection_string=connection_string,
+                path=self._path,
+                async_mode=self._async_mode,
+                **self._kwargs
+            )
+        
+        # Create session from pool
+        try:
+            self._session = self._pool_manager.create_session()
+            return self._session
+        except SessionLimitExceeded as e:
+            logger.error(f"Failed to create session: {str(e)}")
+            raise
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Exit context manager and release session"""
+        if self._session is not None:
+            # Release session back to pool
+            if self._pool_manager:
+                self._pool_manager.release_session(self._session)
+            
+            # Close session
+            try:
+                if isinstance(self._session, AsyncSession):
+                    await self._session.close()
+                else:
+                    self._session.close()
+            except Exception as e:
+                logger.warning(f"Error closing session in context manager: {str(e)}")
+            
+            self._session = None
+        
+        return False  # Don't suppress exceptions
+
+
+# UNUSED: Session pool code - kept for future use
+def create_task_tree_session(
+    connection_string: Optional[str] = None,
+    **kwargs
+) -> TaskTreeSession:
+    """
+    Create a TaskTreeSession context manager for task tree execution
+    
+    This is the recommended way to create database sessions for concurrent task tree executions.
+    The session is automatically managed with pool limits and cleanup.
+    
+    Args:
+        connection_string: Database connection string (optional)
+        path: Database file path (DuckDB only, optional)
+        async_mode: Whether to use async mode (optional)
+        **kwargs: Additional engine parameters
+    
+    Returns:
+        TaskTreeSession context manager
+        
+    Example:
+        async with create_task_tree_session() as session:
+            task_executor = TaskExecutor()
+            await task_executor.execute_tasks(tasks, db_session=session)
+    """
+    return TaskTreeSession(
+        connection_string=connection_string,
+        **kwargs
+    )
 
