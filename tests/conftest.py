@@ -562,7 +562,21 @@ def use_test_db_session(sync_db_session):
             ...
     """
     set_default_session(sync_db_session)
-    yield sync_db_session
+    
+    # Patch create_pooled_session to return the test session
+    # This ensures that code using create_pooled_session() gets the test session
+    from contextlib import asynccontextmanager
+    
+    @asynccontextmanager
+    async def mock_create_pooled_session(*args, **kwargs):
+        yield sync_db_session
+        
+    # Patch both the factory function and the import in routes and executor
+    with patch('aipartnerupflow.core.storage.factory.create_pooled_session', side_effect=mock_create_pooled_session), \
+         patch('aipartnerupflow.api.routes.tasks.create_pooled_session', side_effect=mock_create_pooled_session), \
+         patch('aipartnerupflow.core.execution.task_executor.create_pooled_session', side_effect=mock_create_pooled_session):
+        yield sync_db_session
+        
     reset_default_session()
 
 

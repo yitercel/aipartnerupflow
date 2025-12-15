@@ -10,7 +10,7 @@ from sqlalchemy import select
 from aipartnerupflow.core.execution.task_manager import TaskManager
 from aipartnerupflow.core.execution.task_tracker import TaskTracker
 from aipartnerupflow.core.types import TaskTreeNode
-from aipartnerupflow.core.storage import get_default_session, create_task_tree_session
+from aipartnerupflow.core.storage import get_default_session, create_pooled_session
 from aipartnerupflow.core.storage.sqlalchemy.models import TaskModel
 from aipartnerupflow.core.config import (
     get_task_model_class,
@@ -174,7 +174,15 @@ class TaskExecutor:
             Execution result dictionary
         """
         if db_session is None:
-            db_session = get_default_session()
+            async with create_pooled_session() as session:
+                return await self.execute_task_tree(
+                    task_tree=task_tree,
+                    root_task_id=root_task_id,
+                    use_streaming=use_streaming,
+                    streaming_callbacks_context=streaming_callbacks_context,
+                    use_demo=use_demo,
+                    db_session=session,
+                )
         
         # Start task tracking
         await self.start_task_tracking(root_task_id)
@@ -309,7 +317,10 @@ class TaskExecutor:
             Dictionary with cancellation result from TaskManager
         """
         if db_session is None:
-            db_session = get_default_session()
+            async with create_pooled_session() as session:
+                return await self.cancel_task(
+                    task_id=task_id, error_message=error_message, db_session=session
+                )
         
         # Create TaskManager instance with shared executor_instances
         # This allows cancel_task() to access executors created during execution
@@ -669,7 +680,16 @@ class TaskExecutor:
         
         # Get database session
         if db_session is None:
-            db_session = get_default_session()
+            async with create_pooled_session() as session:
+                return await self.execute_tasks(
+                    tasks=tasks,
+                    root_task_id=root_task_id,
+                    use_streaming=use_streaming,
+                    streaming_callbacks_context=streaming_callbacks_context,
+                    require_existing_tasks=require_existing_tasks,
+                    use_demo=use_demo,
+                    db_session=session,
+                )
         
         # Determine whether to require existing tasks
         # Parameter takes precedence, then global config, then default to False
@@ -967,7 +987,14 @@ class TaskExecutor:
         
         # Get database session
         if db_session is None:
-            db_session = get_default_session()
+            async with create_pooled_session() as session:
+                return await self.execute_task_by_id(
+                    task_id=task_id,
+                    use_streaming=use_streaming,
+                    streaming_callbacks_context=streaming_callbacks_context,
+                    use_demo=use_demo,
+                    db_session=session,
+                )
         
         # Create repository
         task_repository = TaskRepository(db_session, task_model_class=self.task_model_class)

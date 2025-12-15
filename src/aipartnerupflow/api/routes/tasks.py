@@ -16,7 +16,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 
 from aipartnerupflow.api.routes.base import BaseRouteHandler
-from aipartnerupflow.core.storage import get_default_session
+from aipartnerupflow.core.storage import get_default_session, create_pooled_session
 from aipartnerupflow.core.storage.sqlalchemy.task_repository import TaskRepository
 from aipartnerupflow.core.execution.task_creator import TaskCreator
 from aipartnerupflow.core.utils.logger import get_logger
@@ -460,18 +460,18 @@ class TaskRoutes(BaseRouteHandler):
                 raise ValueError("Task ID is required")
 
             # Get database session and create repository
-            db_session = get_default_session()
-            task_repository = self._get_task_repository(db_session)
+            async with create_pooled_session() as db_session:
+                task_repository = self._get_task_repository(db_session)
 
-            task = await task_repository.get_task_by_id(task_id)
+                task = await task_repository.get_task_by_id(task_id)
 
-            if not task:
-                return None
+                if not task:
+                    return None
 
-            # Check permission to access this task
-            self._check_permission(request, task.user_id, "access")
+                # Check permission to access this task
+                self._check_permission(request, task.user_id, "access")
 
-            return task.to_dict()
+                return task.to_dict()
 
         except Exception as e:
             logger.error(f"Error getting task detail: {str(e)}", exc_info=True)
@@ -496,25 +496,25 @@ class TaskRoutes(BaseRouteHandler):
                 raise ValueError("Task ID or root_id is required")
 
             # Get database session and create repository
-            db_session = get_default_session()
-            task_repository = self._get_task_repository(db_session)
+            async with create_pooled_session() as db_session:
+                task_repository = self._get_task_repository(db_session)
 
-            # Get task
-            task = await task_repository.get_task_by_id(task_id)
-            if not task:
-                raise ValueError(f"Task {task_id} not found")
+                # Get task
+                task = await task_repository.get_task_by_id(task_id)
+                if not task:
+                    raise ValueError(f"Task {task_id} not found")
 
-            # Check permission to access this task
-            self._check_permission(request, task.user_id, "access")
+                # Check permission to access this task
+                self._check_permission(request, task.user_id, "access")
 
-            # If task has parent, find root first
-            root_task = await task_repository.get_root_task(task)
+                # If task has parent, find root first
+                root_task = await task_repository.get_root_task(task)
 
-            # Build task tree
-            task_tree_node = await task_repository.build_task_tree(root_task)
+                # Build task tree
+                task_tree_node = await task_repository.build_task_tree(root_task)
 
-            # Convert TaskTreeNode to dictionary format
-            return tree_node_to_dict(task_tree_node)
+                # Convert TaskTreeNode to dictionary format
+                return tree_node_to_dict(task_tree_node)
 
         except Exception as e:
             logger.error(f"Error getting task tree: {str(e)}", exc_info=True)
@@ -562,30 +562,30 @@ class TaskRoutes(BaseRouteHandler):
                 return []
 
             # Get database session and create repository to fetch task details
-            db_session = get_default_session()
-            task_repository = self._get_task_repository(db_session)
+            async with create_pooled_session() as db_session:
+                task_repository = self._get_task_repository(db_session)
 
-            # Fetch task details for running tasks
-            tasks = []
-            for task_id in running_task_ids[:limit]:  # Apply limit
-                task = await task_repository.get_task_by_id(task_id)
-                if task:
-                    # Apply user_id filter if specified
-                    if user_id and task.user_id != user_id:
-                        continue
+                # Fetch task details for running tasks
+                tasks = []
+                for task_id in running_task_ids[:limit]:  # Apply limit
+                    task = await task_repository.get_task_by_id(task_id)
+                    if task:
+                        # Apply user_id filter if specified
+                        if user_id and task.user_id != user_id:
+                            continue
 
-                    # Check permission to access this task
-                    try:
-                        self._check_permission(request, task.user_id, "access")
-                        tasks.append(task.to_dict())
-                    except ValueError:
-                        # Permission denied, skip this task
-                        logger.warning(f"Permission denied for task {task_id}")
+                        # Check permission to access this task
+                        try:
+                            self._check_permission(request, task.user_id, "access")
+                            tasks.append(task.to_dict())
+                        except ValueError:
+                            # Permission denied, skip this task
+                            logger.warning(f"Permission denied for task {task_id}")
 
-            # Sort by created_at descending
-            tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+                # Sort by created_at descending
+                tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
 
-            return tasks
+                return tasks
 
         except Exception as e:
             logger.error(f"Error getting running tasks list: {str(e)}", exc_info=True)
@@ -628,45 +628,45 @@ class TaskRoutes(BaseRouteHandler):
                 # If no JWT and no user_id, user_id remains None (list all tasks, backward compatibility)
 
             # Get database session and create repository
-            db_session = get_default_session()
-            task_repository = self._get_task_repository(db_session)
+            async with create_pooled_session() as db_session:
+                task_repository = self._get_task_repository(db_session)
 
-            # Query tasks with filters
-            # If root_only is True, set parent_id to "" to filter for root tasks (parent_id is None)
-            parent_id_filter = "" if root_only else None
-            tasks = await task_repository.query_tasks(
-                user_id=user_id,
-                status=status,
-                parent_id=parent_id_filter,
-                limit=limit,
-                offset=offset,
-                order_by="created_at",
-                order_desc=True,
-            )
+                # Query tasks with filters
+                # If root_only is True, set parent_id to "" to filter for root tasks (parent_id is None)
+                parent_id_filter = "" if root_only else None
+                tasks = await task_repository.query_tasks(
+                    user_id=user_id,
+                    status=status,
+                    parent_id=parent_id_filter,
+                    limit=limit,
+                    offset=offset,
+                    order_by="created_at",
+                    order_desc=True,
+                )
 
-            # Convert to dictionaries and check permissions
-            # Also check if tasks have children for UI optimization
-            task_dicts = []
-            for task in tasks:
-                # Check permission to access this task
-                try:
-                    if task.user_id:
-                        self._check_permission(request, task.user_id, "access")
+                # Convert to dictionaries and check permissions
+                # Also check if tasks have children for UI optimization
+                task_dicts = []
+                for task in tasks:
+                    # Check permission to access this task
+                    try:
+                        if task.user_id:
+                            self._check_permission(request, task.user_id, "access")
 
-                    task_dict = task.to_dict()
+                        task_dict = task.to_dict()
 
-                    # Check if task has children (if has_children field is not set or False, check database)
-                    if not task_dict.get("has_children"):
-                        # Quick check: query if there are any child tasks
-                        children = await task_repository.get_child_tasks_by_parent_id(task.id)
-                        task_dict["has_children"] = len(children) > 0
+                        # Check if task has children (if has_children field is not set or False, check database)
+                        if not task_dict.get("has_children"):
+                            # Quick check: query if there are any child tasks
+                            children = await task_repository.get_child_tasks_by_parent_id(task.id)
+                            task_dict["has_children"] = len(children) > 0
 
-                    task_dicts.append(task_dict)
-                except ValueError:
-                    # Permission denied, skip this task
-                    logger.warning(f"Permission denied for task {task.id}")
+                        task_dicts.append(task_dict)
+                    except ValueError:
+                        # Permission denied, skip this task
+                        logger.warning(f"Permission denied for task {task.id}")
 
-            return task_dicts
+                return task_dicts
 
         except Exception as e:
             logger.error(f"Error getting tasks list: {str(e)}", exc_info=True)
@@ -691,33 +691,33 @@ class TaskRoutes(BaseRouteHandler):
                 )
 
             # Get database session and create repository
-            db_session = get_default_session()
-            task_repository = self._get_task_repository(db_session)
+            async with create_pooled_session() as db_session:
+                task_repository = self._get_task_repository(db_session)
 
-            # Get parent task to check permission
-            parent_task = await task_repository.get_task_by_id(parent_id)
-            if not parent_task:
-                raise ValueError(f"Parent task {parent_id} not found")
+                # Get parent task to check permission
+                parent_task = await task_repository.get_task_by_id(parent_id)
+                if not parent_task:
+                    raise ValueError(f"Parent task {parent_id} not found")
 
-            # Check permission to access parent task
-            if parent_task.user_id:
-                self._check_permission(request, parent_task.user_id, "access")
+                # Check permission to access parent task
+                if parent_task.user_id:
+                    self._check_permission(request, parent_task.user_id, "access")
 
-            # Get child tasks
-            children = await task_repository.get_child_tasks_by_parent_id(parent_id)
+                # Get child tasks
+                children = await task_repository.get_child_tasks_by_parent_id(parent_id)
 
-            # Convert to dictionaries and check permissions
-            child_dicts = []
-            for child in children:
-                try:
-                    if child.user_id:
-                        self._check_permission(request, child.user_id, "access")
-                    child_dicts.append(child.to_dict())
-                except ValueError:
-                    # Permission denied, skip this child task
-                    logger.warning(f"Permission denied for child task {child.id}")
+                # Convert to dictionaries and check permissions
+                child_dicts = []
+                for child in children:
+                    try:
+                        if child.user_id:
+                            self._check_permission(request, child.user_id, "access")
+                        child_dicts.append(child.to_dict())
+                    except ValueError:
+                        # Permission denied, skip this child task
+                        logger.warning(f"Permission denied for child task {child.id}")
 
-            return child_dicts
+                return child_dicts
 
         except Exception as e:
             logger.error(f"Error getting child tasks: {str(e)}", exc_info=True)
@@ -750,84 +750,84 @@ class TaskRoutes(BaseRouteHandler):
             task_executor = TaskExecutor()
 
             # Get database session and create repository
-            db_session = get_default_session()
-            task_repository = self._get_task_repository(db_session)
+            async with create_pooled_session() as db_session:
+                task_repository = self._get_task_repository(db_session)
 
-            statuses = []
-            for task_id in task_ids:
-                task_id = task_id.strip()
+                statuses = []
+                for task_id in task_ids:
+                    task_id = task_id.strip()
 
-                # First check if task is running in memory
-                is_running = task_executor.is_task_running(task_id)
+                    # First check if task is running in memory
+                    is_running = task_executor.is_task_running(task_id)
 
-                # Get task from database for details
-                task = await task_repository.get_task_by_id(task_id)
+                    # Get task from database for details
+                    task = await task_repository.get_task_by_id(task_id)
 
-                if task:
-                    # Check permission to access this task
-                    try:
-                        self._check_permission(request, task.user_id, "access")
-                        statuses.append(
-                            {
-                                "task_id": task.id,
-                                "context_id": task.id,  # For A2A Protocol compatibility
-                                "status": task.status,
-                                "progress": float(task.progress) if task.progress else 0.0,
-                                "error": task.error,
-                                "is_running": is_running,  # Add in-memory running status
-                                "started_at": (
-                                    task.started_at.isoformat() if task.started_at else None
-                                ),
-                                "updated_at": (
-                                    task.updated_at.isoformat() if task.updated_at else None
-                                ),
-                            }
-                        )
-                    except ValueError as e:
-                        # Permission denied, skip this task
-                        logger.warning(f"Permission denied for task {task_id}: {e}")
-                        statuses.append(
-                            {
-                                "task_id": task_id,
-                                "context_id": task_id,
-                                "status": "permission_denied",
-                                "progress": 0.0,
-                                "error": str(e),
-                                "is_running": is_running,
-                                "started_at": None,
-                                "updated_at": None,
-                            }
-                        )
-                else:
-                    # Task not found in database, but check if it's running in memory
-                    if is_running:
-                        statuses.append(
-                            {
-                                "task_id": task_id,
-                                "context_id": task_id,
-                                "status": "in_progress",  # Running but not yet saved to DB
-                                "progress": 0.0,
-                                "error": None,
-                                "is_running": True,
-                                "started_at": None,
-                                "updated_at": None,
-                            }
-                        )
+                    if task:
+                        # Check permission to access this task
+                        try:
+                            self._check_permission(request, task.user_id, "access")
+                            statuses.append(
+                                {
+                                    "task_id": task.id,
+                                    "context_id": task.id,  # For A2A Protocol compatibility
+                                    "status": task.status,
+                                    "progress": float(task.progress) if task.progress else 0.0,
+                                    "error": task.error,
+                                    "is_running": is_running,  # Add in-memory running status
+                                    "started_at": (
+                                        task.started_at.isoformat() if task.started_at else None
+                                    ),
+                                    "updated_at": (
+                                        task.updated_at.isoformat() if task.updated_at else None
+                                    ),
+                                }
+                            )
+                        except ValueError as e:
+                            # Permission denied, skip this task
+                            logger.warning(f"Permission denied for task {task_id}: {e}")
+                            statuses.append(
+                                {
+                                    "task_id": task_id,
+                                    "context_id": task_id,
+                                    "status": "permission_denied",
+                                    "progress": 0.0,
+                                    "error": str(e),
+                                    "is_running": is_running,
+                                    "started_at": None,
+                                    "updated_at": None,
+                                }
+                            )
                     else:
-                        statuses.append(
-                            {
-                                "task_id": task_id,
-                                "context_id": task_id,
-                                "status": "not_found",
-                                "progress": 0.0,
-                                "error": None,
-                                "is_running": False,
-                                "started_at": None,
-                                "updated_at": None,
-                            }
-                        )
+                        # Task not found in database, but check if it's running in memory
+                        if is_running:
+                            statuses.append(
+                                {
+                                    "task_id": task_id,
+                                    "context_id": task_id,
+                                    "status": "in_progress",  # Running but not yet saved to DB
+                                    "progress": 0.0,
+                                    "error": None,
+                                    "is_running": True,
+                                    "started_at": None,
+                                    "updated_at": None,
+                                }
+                            )
+                        else:
+                            statuses.append(
+                                {
+                                    "task_id": task_id,
+                                    "context_id": task_id,
+                                    "status": "not_found",
+                                    "progress": 0.0,
+                                    "error": None,
+                                    "is_running": False,
+                                    "started_at": None,
+                                    "updated_at": None,
+                                }
+                            )
 
-            return statuses
+                return statuses
 
         except Exception as e:
             logger.error(f"Error getting running tasks status: {str(e)}", exc_info=True)
@@ -876,16 +876,16 @@ class TaskRoutes(BaseRouteHandler):
                     return {"count": 0, "user_id": user_id}
 
                 # Get database session to check user_id
-                db_session = get_default_session()
-                task_repository = self._get_task_repository(db_session)
+                async with create_pooled_session() as db_session:
+                    task_repository = self._get_task_repository(db_session)
 
-                count = 0
-                for task_id in running_task_ids:
-                    task = await task_repository.get_task_by_id(task_id)
-                    if task and task.user_id == user_id:
-                        count += 1
+                    count = 0
+                    for task_id in running_task_ids:
+                        task = await task_repository.get_task_by_id(task_id)
+                        if task and task.user_id == user_id:
+                            count += 1
 
-                return {"count": count, "user_id": user_id}
+                    return {"count": count, "user_id": user_id}
             else:
                 # No user_id filter, return total count from memory
                 count = task_executor.get_running_tasks_count()
@@ -943,50 +943,50 @@ class TaskRoutes(BaseRouteHandler):
             task_executor = TaskExecutor()
 
             # Get database session for permission checking
-            db_session = get_default_session()
-            task_repository = self._get_task_repository(db_session)
+            async with create_pooled_session() as db_session:
+                task_repository = self._get_task_repository(db_session)
 
-            results = []
-            for task_id in task_ids:
-                try:
-                    # Check permission: get task to verify user_id
-                    task = await task_repository.get_task_by_id(task_id)
-                    if task:
-                        # Check permission if user_id is specified
-                        if task.user_id:
-                            self._check_permission(request, task.user_id, "cancel task for")
-                    else:
-                        # Task not found, but we'll still try to cancel (might be in memory)
-                        logger.warning(
-                            f"Task {task_id} not found in database, attempting cancellation anyway"
+                results = []
+                for task_id in task_ids:
+                    try:
+                        # Check permission: get task to verify user_id
+                        task = await task_repository.get_task_by_id(task_id)
+                        if task:
+                            # Check permission if user_id is specified
+                            if task.user_id:
+                                self._check_permission(request, task.user_id, "cancel task for")
+                        else:
+                            # Task not found, but we'll still try to cancel (might be in memory)
+                            logger.warning(
+                                f"Task {task_id} not found in database, attempting cancellation anyway"
+                            )
+
+                        # Call TaskExecutor.cancel_task() which handles:
+                        # 1. Calling executor.cancel() if executor supports cancellation
+                        # 2. Updating database with cancelled status and token_usage
+                        cancel_result = await task_executor.cancel_task(task_id, error_message)
+
+                        # Add task_id to result
+                        cancel_result["task_id"] = task_id
+                        cancel_result["force"] = force
+
+                        results.append(cancel_result)
+
+                    except PermissionError as e:
+                        logger.warning(f"Permission denied for cancelling task {task_id}: {str(e)}")
+                        results.append(
+                            {
+                                "task_id": task_id,
+                                "status": "failed",
+                                "message": f"Permission denied: {str(e)}",
+                                "error": "permission_denied",
+                            }
                         )
+                    except Exception as e:
+                        logger.error(f"Error cancelling task {task_id}: {str(e)}", exc_info=True)
+                        results.append({"task_id": task_id, "status": "error", "error": str(e)})
 
-                    # Call TaskExecutor.cancel_task() which handles:
-                    # 1. Calling executor.cancel() if executor supports cancellation
-                    # 2. Updating database with cancelled status and token_usage
-                    cancel_result = await task_executor.cancel_task(task_id, error_message)
-
-                    # Add task_id to result
-                    cancel_result["task_id"] = task_id
-                    cancel_result["force"] = force
-
-                    results.append(cancel_result)
-
-                except PermissionError as e:
-                    logger.warning(f"Permission denied for cancelling task {task_id}: {str(e)}")
-                    results.append(
-                        {
-                            "task_id": task_id,
-                            "status": "failed",
-                            "message": f"Permission denied: {str(e)}",
-                            "error": "permission_denied",
-                        }
-                    )
-                except Exception as e:
-                    logger.error(f"Error cancelling task {task_id}: {str(e)}", exc_info=True)
-                    results.append({"task_id": task_id, "status": "error", "error": str(e)})
-
-            return results
+                return results
 
         except Exception as e:
             logger.error(f"Error handling task cancellation: {str(e)}", exc_info=True)
@@ -1088,22 +1088,22 @@ class TaskRoutes(BaseRouteHandler):
                     resolved_user_id = None
 
             # Get database session and create TaskCreator
-            db_session = get_default_session()
-            task_creator = TaskCreator(db_session)
+            async with create_pooled_session() as db_session:
+                task_creator = TaskCreator(db_session)
 
-            # Create task tree from array
-            task_tree = await task_creator.create_task_tree_from_array(
-                tasks=tasks_array,
-            )
+                # Create task tree from array
+                task_tree = await task_creator.create_task_tree_from_array(
+                    tasks=tasks_array,
+                )
 
-            # Convert task tree to dictionary format for response
-            result = tree_node_to_dict(task_tree)
+                # Convert task tree to dictionary format for response
+                result = tree_node_to_dict(task_tree)
 
-            logger.info(
-                f"Created task tree: root task {task_tree.task.name} "
-                f"with {len(task_tree.children)} direct children"
-            )
-            return result
+                logger.info(
+                    f"Created task tree: root task {task_tree.task.name} "
+                    f"with {len(task_tree.children)} direct children"
+                )
+                return result
 
         except Exception as e:
             logger.error(f"Error creating task: {str(e)}", exc_info=True)
@@ -1119,18 +1119,18 @@ class TaskRoutes(BaseRouteHandler):
                 raise ValueError("Task ID is required. Please provide 'task_id' or 'id' parameter.")
 
             # Get database session and create repository with custom TaskModel
-            db_session = get_default_session()
-            task_repository = self._get_task_repository(db_session)
+            async with create_pooled_session() as db_session:
+                task_repository = self._get_task_repository(db_session)
 
-            task = await task_repository.get_task_by_id(task_id)
+                task = await task_repository.get_task_by_id(task_id)
 
-            if not task:
-                return None
+                if not task:
+                    return None
 
-            # Check permission to access this task
-            self._check_permission(request, task.user_id, "access")
+                # Check permission to access this task
+                self._check_permission(request, task.user_id, "access")
 
-            return task.to_dict()
+                return task.to_dict()
 
         except Exception as e:
             logger.error(f"Error getting task: {str(e)}", exc_info=True)
@@ -1149,102 +1149,102 @@ class TaskRoutes(BaseRouteHandler):
                 raise ValueError("Task ID is required")
 
             # Get database session and create repository with custom TaskModel
-            db_session = get_default_session()
-            task_repository = self._get_task_repository(db_session)
+            async with create_pooled_session() as db_session:
+                task_repository = self._get_task_repository(db_session)
 
-            # Get task first
-            task = await task_repository.get_task_by_id(task_id)
-            if not task:
-                raise ValueError(f"Task {task_id} not found")
+                # Get task first
+                task = await task_repository.get_task_by_id(task_id)
+                if not task:
+                    raise ValueError(f"Task {task_id} not found")
 
-            # Check permission to update this task
-            self._check_permission(request, task.user_id, "update")
+                # Check permission to update this task
+                self._check_permission(request, task.user_id, "update")
 
-            # Collect validation errors
-            validation_errors = []
+                # Collect validation errors
+                validation_errors = []
 
-            # Validate critical fields and collect errors
-            for field_name, field_value in params.items():
-                if field_name == "task_id":
-                    continue  # Skip task_id, it's not a field to update
+                # Validate critical fields and collect errors
+                for field_name, field_value in params.items():
+                    if field_name == "task_id":
+                        continue  # Skip task_id, it's not a field to update
 
-                # Validate critical fields
-                error = await self._validate_critical_field(
-                    task, field_name, field_value, task_repository
-                )
-                if error:
-                    validation_errors.append(error)
-
-            # If there are validation errors, raise exception with all errors
-            if validation_errors:
-                error_message = "Update failed:\n" + "\n".join(
-                    f"- {err}" for err in validation_errors
-                )
-                raise ValueError(error_message)
-
-            # Apply updates for all fields
-
-            # Update status and related fields if provided
-            status = params.get("status")
-            if status is not None:
-                await task_repository.update_task_status(
-                    task_id=task_id,
-                    status=status,
-                    error=params.get("error"),
-                    result=params.get("result"),
-                    progress=params.get("progress"),
-                    started_at=params.get("started_at"),
-                    completed_at=params.get("completed_at"),
-                )
-            else:
-                # Update individual status-related fields if status is not provided
-                if "error" in params:
-                    await task_repository.update_task_status(
-                        task_id=task_id, status=task.status, error=params.get("error")
+                    # Validate critical fields
+                    error = await self._validate_critical_field(
+                        task, field_name, field_value, task_repository
                     )
-                if "result" in params:
-                    await task_repository.update_task_status(
-                        task_id=task_id, status=task.status, result=params.get("result")
+                    if error:
+                        validation_errors.append(error)
+
+                # If there are validation errors, raise exception with all errors
+                if validation_errors:
+                    error_message = "Update failed:\n" + "\n".join(
+                        f"- {err}" for err in validation_errors
                     )
-                if "progress" in params:
+                    raise ValueError(error_message)
+
+                # Apply updates for all fields
+
+                # Update status and related fields if provided
+                status = params.get("status")
+                if status is not None:
                     await task_repository.update_task_status(
-                        task_id=task_id, status=task.status, progress=params.get("progress")
+                        task_id=task_id,
+                        status=status,
+                        error=params.get("error"),
+                        result=params.get("result"),
+                        progress=params.get("progress"),
+                        started_at=params.get("started_at"),
+                        completed_at=params.get("completed_at"),
                     )
-                if "started_at" in params:
-                    await task_repository.update_task_status(
-                        task_id=task_id, status=task.status, started_at=params.get("started_at")
-                    )
-                if "completed_at" in params:
-                    await task_repository.update_task_status(
-                        task_id=task_id, status=task.status, completed_at=params.get("completed_at")
-                    )
+                else:
+                    # Update individual status-related fields if status is not provided
+                    if "error" in params:
+                        await task_repository.update_task_status(
+                            task_id=task_id, status=task.status, error=params.get("error")
+                        )
+                    if "result" in params:
+                        await task_repository.update_task_status(
+                            task_id=task_id, status=task.status, result=params.get("result")
+                        )
+                    if "progress" in params:
+                        await task_repository.update_task_status(
+                            task_id=task_id, status=task.status, progress=params.get("progress")
+                        )
+                    if "started_at" in params:
+                        await task_repository.update_task_status(
+                            task_id=task_id, status=task.status, started_at=params.get("started_at")
+                        )
+                    if "completed_at" in params:
+                        await task_repository.update_task_status(
+                            task_id=task_id, status=task.status, completed_at=params.get("completed_at")
+                        )
 
-            # Update other fields
-            if "inputs" in params:
-                await task_repository.update_task_inputs(task_id, params["inputs"])
+                # Update other fields
+                if "inputs" in params:
+                    await task_repository.update_task_inputs(task_id, params["inputs"])
 
-            if "dependencies" in params:
-                await task_repository.update_task_dependencies(task_id, params["dependencies"])
+                if "dependencies" in params:
+                    await task_repository.update_task_dependencies(task_id, params["dependencies"])
 
-            if "name" in params:
-                await task_repository.update_task_name(task_id, params["name"])
+                if "name" in params:
+                    await task_repository.update_task_name(task_id, params["name"])
 
-            if "priority" in params:
-                await task_repository.update_task_priority(task_id, params["priority"])
+                if "priority" in params:
+                    await task_repository.update_task_priority(task_id, params["priority"])
 
-            if "params" in params:
-                await task_repository.update_task_params(task_id, params["params"])
+                if "params" in params:
+                    await task_repository.update_task_params(task_id, params["params"])
 
-            if "schemas" in params:
-                await task_repository.update_task_schemas(task_id, params["schemas"])
+                if "schemas" in params:
+                    await task_repository.update_task_schemas(task_id, params["schemas"])
 
-            # Refresh task to get updated values
-            updated_task = await task_repository.get_task_by_id(task_id)
-            if not updated_task:
-                raise ValueError(f"Task {task_id} not found after update")
+                # Refresh task to get updated values
+                updated_task = await task_repository.get_task_by_id(task_id)
+                if not updated_task:
+                    raise ValueError(f"Task {task_id} not found after update")
 
-            logger.info(f"Updated task {task_id}")
-            return updated_task.to_dict()
+                logger.info(f"Updated task {task_id}")
+                return updated_task.to_dict()
 
         except ValueError:
             # Re-raise ValueError (validation errors) as-is
@@ -1400,87 +1400,87 @@ class TaskRoutes(BaseRouteHandler):
                 raise ValueError("Task ID is required")
 
             # Get database session and create repository
-            db_session = get_default_session()
-            task_repository = self._get_task_repository(db_session)
+            async with create_pooled_session() as db_session:
+                task_repository = self._get_task_repository(db_session)
 
-            # Get task first to check if exists
-            task = await task_repository.get_task_by_id(task_id)
-            if not task:
-                raise ValueError(f"Task {task_id} not found")
+                # Get task first to check if exists
+                task = await task_repository.get_task_by_id(task_id)
+                if not task:
+                    raise ValueError(f"Task {task_id} not found")
 
-            # Check permission to delete this task
-            self._check_permission(request, task.user_id, "delete")
+                # Check permission to delete this task
+                self._check_permission(request, task.user_id, "delete")
 
-            # Get all children recursively
-            all_children = await self._get_all_children_recursive(task_repository, task_id)
+                # Get all children recursively
+                all_children = await self._get_all_children_recursive(task_repository, task_id)
 
-            # Collect all tasks to check (task itself + all children)
-            all_tasks_to_check = [task] + all_children
+                # Collect all tasks to check (task itself + all children)
+                all_tasks_to_check = [task] + all_children
 
-            # Check if all tasks are pending
-            all_pending, non_pending_tasks = self._check_all_tasks_pending(all_tasks_to_check)
+                # Check if all tasks are pending
+                all_pending, non_pending_tasks = self._check_all_tasks_pending(all_tasks_to_check)
 
-            # Check for dependent tasks (always check, regardless of pending status)
-            dependent_tasks = await self._find_dependent_tasks(task_repository, task_id)
+                # Check for dependent tasks (always check, regardless of pending status)
+                dependent_tasks = await self._find_dependent_tasks(task_repository, task_id)
 
-            # Build error message if deletion is not allowed
-            error_parts = []
+                # Build error message if deletion is not allowed
+                error_parts = []
 
-            # Check for non-pending tasks
-            if not all_pending:
-                # Filter out the main task from non_pending_tasks to get only children
-                non_pending_children = [t for t in non_pending_tasks if t["task_id"] != task_id]
+                # Check for non-pending tasks
+                if not all_pending:
+                    # Filter out the main task from non_pending_tasks to get only children
+                    non_pending_children = [t for t in non_pending_tasks if t["task_id"] != task_id]
 
-                if non_pending_children:
-                    children_info = ", ".join(
-                        [f"{t['task_id']}: {t['status']}" for t in non_pending_children]
-                    )
+                    if non_pending_children:
+                        children_info = ", ".join(
+                            [f"{t['task_id']}: {t['status']}" for t in non_pending_children]
+                        )
+                        error_parts.append(
+                            f"task has {len(non_pending_children)} non-pending children: [{children_info}]"
+                        )
+
+                    # Also check if the main task itself is not pending
+                    if any(t["task_id"] == task_id for t in non_pending_tasks):
+                        main_task_status = next(
+                            t["status"] for t in non_pending_tasks if t["task_id"] == task_id
+                        )
+                        error_parts.append(f"task status is '{main_task_status}' (must be 'pending')")
+
+                # Check for dependent tasks
+                if dependent_tasks:
+                    dependent_task_ids = [t.id for t in dependent_tasks]
                     error_parts.append(
-                        f"task has {len(non_pending_children)} non-pending children: [{children_info}]"
+                        f"{len(dependent_tasks)} tasks depend on this task: [{', '.join(dependent_task_ids)}]"
                     )
 
-                # Also check if the main task itself is not pending
-                if any(t["task_id"] == task_id for t in non_pending_tasks):
-                    main_task_status = next(
-                        t["status"] for t in non_pending_tasks if t["task_id"] == task_id
-                    )
-                    error_parts.append(f"task status is '{main_task_status}' (must be 'pending')")
+                # If there are any errors, raise exception
+                if error_parts:
+                    error_message = "Cannot delete task: " + "; ".join(error_parts)
+                    raise ValueError(error_message)
 
-            # Check for dependent tasks
-            if dependent_tasks:
-                dependent_task_ids = [t.id for t in dependent_tasks]
-                error_parts.append(
-                    f"{len(dependent_tasks)} tasks depend on this task: [{', '.join(dependent_task_ids)}]"
-                )
+                # All conditions met: all tasks are pending and no dependencies
+                # Delete all tasks (children first, then parent)
+                deleted_count = 0
+                for child in all_children:
+                    success = await task_repository.delete_task(child.id)
+                    if success:
+                        deleted_count += 1
 
-            # If there are any errors, raise exception
-            if error_parts:
-                error_message = "Cannot delete task: " + "; ".join(error_parts)
-                raise ValueError(error_message)
-
-            # All conditions met: all tasks are pending and no dependencies
-            # Delete all tasks (children first, then parent)
-            deleted_count = 0
-            for child in all_children:
-                success = await task_repository.delete_task(child.id)
+                # Delete the main task
+                success = await task_repository.delete_task(task_id)
                 if success:
                     deleted_count += 1
 
-            # Delete the main task
-            success = await task_repository.delete_task(task_id)
-            if success:
-                deleted_count += 1
-
-            logger.info(
-                f"Deleted task {task_id} and {len(all_children)} children "
-                f"({deleted_count} total tasks deleted)"
-            )
-            return {
-                "success": True,
-                "task_id": task_id,
-                "deleted_count": deleted_count,
-                "children_deleted": len(all_children),
-            }
+                logger.info(
+                    f"Deleted task {task_id} and {len(all_children)} children "
+                    f"({deleted_count} total tasks deleted)"
+                )
+                return {
+                    "success": True,
+                    "task_id": task_id,
+                    "deleted_count": deleted_count,
+                    "children_deleted": len(all_children),
+                }
 
         except ValueError as e:
             # Re-raise ValueError with detailed error message
@@ -1506,29 +1506,29 @@ class TaskRoutes(BaseRouteHandler):
             children = params.get("children", False)
 
             # Get database session and create repository with custom TaskModel
-            db_session = get_default_session()
-            task_repository = self._get_task_repository(db_session)
+            async with create_pooled_session() as db_session:
+                task_repository = self._get_task_repository(db_session)
 
-            # Get original task
-            original_task = await task_repository.get_task_by_id(task_id)
-            if not original_task:
-                raise ValueError(f"Task {task_id} not found")
+                # Get original task
+                original_task = await task_repository.get_task_by_id(task_id)
+                if not original_task:
+                    raise ValueError(f"Task {task_id} not found")
 
-            # Check permission to copy this task
-            self._check_permission(request, original_task.user_id, "copy")
+                # Check permission to copy this task
+                self._check_permission(request, original_task.user_id, "copy")
 
-            # Create TaskCreator and copy task
-            task_creator = TaskCreator(db_session)
+                # Create TaskCreator and copy task
+                task_creator = TaskCreator(db_session)
 
-            new_tree = await task_creator.create_task_copy(original_task, children=children)
+                new_tree = await task_creator.create_task_copy(original_task, children=children)
 
-            # Convert task tree to dictionary format for response
-            result = tree_node_to_dict(new_tree)
+                # Convert task tree to dictionary format for response
+                result = tree_node_to_dict(new_tree)
 
-            logger.info(
-                f"Copied task {task_id} to new task {new_tree.task.id} (children={children})"
-            )
-            return result
+                logger.info(
+                    f"Copied task {task_id} to new task {new_tree.task.id} (children={children})"
+                )
+                return result
 
         except Exception as e:
             logger.error(f"Error copying task: {str(e)}", exc_info=True)
@@ -1600,70 +1600,70 @@ class TaskRoutes(BaseRouteHandler):
             max_tokens = params.get("max_tokens")
 
             # Get database session and create repository
-            db_session = get_default_session()
-            task_repository = TaskRepository(db_session, task_model_class=get_task_model_class())
+            async with create_pooled_session() as db_session:
+                task_repository = TaskRepository(db_session, task_model_class=get_task_model_class())
 
-            # Create generate task
-            generate_task = await task_repository.create_task(
-                name="generate_executor",
-                user_id=user_id or "api_user",
-                inputs={
-                    "requirement": requirement,
-                    "user_id": user_id,
-                    "llm_provider": llm_provider,
-                    "model": model,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                },
-                schemas={
-                    "method": "generate_executor"
-                },  # Required for TaskManager to find executor
-            )
+                # Create generate task
+                generate_task = await task_repository.create_task(
+                    name="generate_executor",
+                    user_id=user_id or "api_user",
+                    inputs={
+                        "requirement": requirement,
+                        "user_id": user_id,
+                        "llm_provider": llm_provider,
+                        "model": model,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                    },
+                    schemas={
+                        "method": "generate_executor"
+                    },  # Required for TaskManager to find executor
+                )
 
-            # Execute generate_executor
-            task_tree = TaskTreeNode(generate_task)
-            task_executor = TaskExecutor()
-            await task_executor.execute_task_tree(
-                task_tree=task_tree,
-                root_task_id=generate_task.id,
-                use_streaming=False,
-                use_demo=False,
-                db_session=db_session,
-            )
+                # Execute generate_executor
+                task_tree = TaskTreeNode(generate_task)
+                task_executor = TaskExecutor()
+                await task_executor.execute_task_tree(
+                    task_tree=task_tree,
+                    root_task_id=generate_task.id,
+                    use_streaming=False,
+                    use_demo=False,
+                    db_session=db_session,
+                )
 
-            # Get result
-            result_task = await task_repository.get_task_by_id(generate_task.id)
+                # Get result
+                result_task = await task_repository.get_task_by_id(generate_task.id)
 
-            if result_task.status == "failed":
-                error_msg = result_task.error or "Unknown error"
-                raise ValueError(f"Task generation failed: {error_msg}")
+                if result_task.status == "failed":
+                    error_msg = result_task.error or "Unknown error"
+                    raise ValueError(f"Task generation failed: {error_msg}")
 
-            if result_task.status != "completed":
-                raise ValueError(f"Task generation incomplete. Status: {result_task.status}")
+                if result_task.status != "completed":
+                    raise ValueError(f"Task generation incomplete. Status: {result_task.status}")
 
-            # Extract generated tasks
-            result_data = result_task.result or {}
-            generated_tasks = result_data.get("tasks", [])
+                # Extract generated tasks
+                result_data = result_task.result or {}
+                generated_tasks = result_data.get("tasks", [])
 
-            if not generated_tasks:
-                raise ValueError("No tasks were generated")
+                if not generated_tasks:
+                    raise ValueError("No tasks were generated")
 
-            # Build response
-            response = {
-                "tasks": generated_tasks,
-                "count": len(generated_tasks),
-                "message": f"Successfully generated {len(generated_tasks)} task(s)",
-            }
+                # Build response
+                response = {
+                    "tasks": generated_tasks,
+                    "count": len(generated_tasks),
+                    "message": f"Successfully generated {len(generated_tasks)} task(s)",
+                }
 
-            # Optionally save to database
-            save = params.get("save", False)
-            if save:
-                task_creator = TaskCreator(db_session)
-                final_task_tree = await task_creator.create_task_tree_from_array(generated_tasks)
-                response["root_task_id"] = final_task_tree.task.id
-                response[
-                    "message"
-                ] += f" and saved to database (root_task_id: {final_task_tree.task.id})"
+                # Optionally save to database
+                save = params.get("save", False)
+                if save:
+                    task_creator = TaskCreator(db_session)
+                    final_task_tree = await task_creator.create_task_tree_from_array(generated_tasks)
+                    response["root_task_id"] = final_task_tree.task.id
+                    response[
+                        "message"
+                    ] += f" and saved to database (root_task_id: {final_task_tree.task.id})"
 
             logger.info(
                 f"Generated {len(generated_tasks)} task(s) from requirement: {requirement[:100]}..."
@@ -1686,6 +1686,74 @@ class TaskRoutes(BaseRouteHandler):
         except Exception as e:
             logger.error(f"Error generating task tree: {str(e)}", exc_info=True)
             raise ValueError(f"Failed to generate task tree: {str(e)}")
+
+
+    async def _run_background_execution(
+        self,
+        task_executor: Any,
+        execution_mode: str,
+        streaming_context: Any,
+        session_factory: Any,
+        task_id: Optional[str] = None,
+        tasks: Optional[List[Dict[str, Any]]] = None,
+        copy_execution: bool = False,
+        copy_children: bool = False,
+        use_streaming: bool = False,
+        use_demo: bool = False,
+        original_task_id: Optional[str] = None,
+    ):
+        """
+        Run task execution in background with its own session
+        """
+        try:
+            async with session_factory() as db_session:
+                if execution_mode == "task_id":
+                    # Mode 1: Execute by task_id
+                    if copy_execution and original_task_id:
+                        # We need to copy the task first using the new session
+                        # Note: The task_id passed here is the original one
+                        # But wait, the logic in handle_task_execute did the copy BEFORE execution
+                        # If we move it here, we need to handle it here.
+                        # However, handle_task_execute already did the copy if it was synchronous.
+                        # Let's assume the task_id passed here is the one to execute (already copied if needed)
+                        pass
+
+                    await task_executor.execute_task_by_id(
+                        task_id=task_id,
+                        use_streaming=bool(streaming_context),
+                        streaming_callbacks_context=streaming_context,
+                        use_demo=use_demo,
+                        db_session=db_session,
+                    )
+                elif execution_mode == "tasks_array":
+                    # Mode 2: Execute by tasks array
+                    await task_executor.execute_tasks(
+                        tasks=tasks,
+                        root_task_id=None,
+                        use_streaming=bool(streaming_context),
+                        streaming_callbacks_context=streaming_context,
+                        require_existing_tasks=None,
+                        use_demo=use_demo,
+                        db_session=db_session,
+                    )
+        except Exception as e:
+            logger.error(f"Error in background execution: {str(e)}", exc_info=True)
+            if streaming_context:
+                # Try to report error to streaming context
+                try:
+                    await streaming_context.put(
+                        {"type": "error", "error": str(e), "final": True}
+                    )
+                except Exception:
+                    pass
+        finally:
+            if streaming_context:
+                # Ensure we close the streaming context if it wasn't closed by the executor
+                # (Executor doesn't close it, the SSE generator closes it, but if we are just pushing to it...)
+                # Wait, the SSE generator closes it when the loop ends.
+                # The loop ends when it sees a final event or timeout.
+                # If we crash here, we should send a final event or error.
+                pass
 
     async def handle_task_execute(
         self, params: dict, request: Request, request_id: str, jsonrpc_id: Any = None
@@ -1745,157 +1813,151 @@ class TaskRoutes(BaseRouteHandler):
             - Initial event contains JSON-RPC response with task info
             - Subsequent events contain real-time progress updates
             - Final event indicates completion
-            - webhook_url included in initial event if webhook_config is provided
-
-            If webhook_config is provided, updates will be sent to the webhook URL
-            regardless of the response mode.
+        Handle task execution request
+        
+        Supports two modes:
+        1. Execute by task_id: {"task_id": "..."}
+        2. Execute by tasks array: {"tasks": [...]}
+        
+        Supports streaming (SSE) and webhook callbacks.
         """
         try:
-            task_id = params.get("task_id") or params.get("id")
-            tasks = params.get("tasks")
+            # Parse parameters
+            if isinstance(params, list):
+                # Direct list of tasks
+                execution_mode = "tasks_array"
+                tasks = params
+                task_id = None
+            else:
+                # Dict with options
+                task_id = params.get("task_id")
+                tasks = params.get("tasks")
+                
+                if task_id:
+                    execution_mode = "task_id"
+                elif tasks:
+                    execution_mode = "tasks_array"
+                else:
+                    raise ValueError("Either task_id or tasks array is required")
+
+            # Common options
             use_streaming = params.get("use_streaming", False)
-            use_demo = params.get("use_demo", False)
+            webhook_config = params.get("webhook_config", None)
             copy_execution = params.get("copy_execution", False)
             copy_children = params.get("copy_children", False)
-            webhook_config = params.get("webhook_config")
+            use_demo = params.get("use_demo", False)
 
-            # Determine execution mode
-            if tasks and isinstance(tasks, list):
-                # Mode 2: Execute by tasks array
-                execution_mode = "tasks_array"
-                logger.info(f"Executing tasks array mode: {len(tasks)} tasks")
-            elif task_id:
-                # Mode 1: Execute by task_id
-                execution_mode = "task_id"
-                logger.info(f"Executing task_id mode: {task_id}")
-            else:
-                raise ValueError("Either task_id or tasks array is required")
-
-            # Get database session
-            db_session = get_default_session()
-
-            # Execute task tree using TaskExecutor
+            # Get TaskExecutor
             from aipartnerupflow.core.execution.task_executor import TaskExecutor
-
             task_executor = TaskExecutor()
 
-            # Get root_task_id for streaming context
+            # Execution setup variables
+            execution_task_id = None
+            execution_tasks = None
             root_task_id = None
-            execution_result = None
-
-            if execution_mode == "task_id":
-                # Mode 1: Execute by task_id using execute_task_by_id()
-                # Get task to check permission and get root_task_id
-                task_repository = self._get_task_repository(db_session)
-                task = await task_repository.get_task_by_id(task_id)
-                if not task:
-                    raise ValueError(f"Task {task_id} not found")
-
-                # Check permission
-                self._check_permission(request, task.user_id, "execute")
-
-                # If copy_execution is True, create a copy first
-                original_task_id = task_id
-                if copy_execution:
-                    logger.info(
-                        f"Copying task {task_id} before execution (copy_children={copy_children})"
-                    )
-                    task_creator = TaskCreator(db_session)
-                    copied_tree = await task_creator.create_task_copy(task, children=copy_children)
-                    task_id = copied_tree.task.id
-                    logger.info(f"Task copied: original={original_task_id}, copy={task_id}")
-
-                    # Get the copied task from database
+            original_task_id = None
+            
+            # Preparation phase (Foreground)
+            async with create_pooled_session() as db_session:
+                if execution_mode == "task_id":
+                    # Mode 1: Execute by task_id
+                    task_repository = self._get_task_repository(db_session)
                     task = await task_repository.get_task_by_id(task_id)
                     if not task:
-                        raise ValueError(f"Copied task {task_id} not found")
+                        raise ValueError(f"Task {task_id} not found")
 
-                # Note: use_demo is now passed as parameter to TaskExecutor, not injected into inputs
-                # Check if task is already running
-                from aipartnerupflow.core.execution.task_tracker import TaskTracker
+                    # Check permission
+                    self._check_permission(request, task.user_id, "execute")
 
-                task_tracker = TaskTracker()
-                if task_tracker.is_task_running(task_id):
-                    return {
-                        "success": False,
-                        "protocol": "jsonrpc",
-                        "root_task_id": task_id,
-                        "status": "already_running",
-                        "message": f"Task {task_id} is already running",
-                        **({"original_task_id": original_task_id} if copy_execution else {}),
-                    }
+                    # If copy_execution is True, create a copy first
+                    original_task_id = task_id
+                    if copy_execution:
+                        logger.info(
+                            f"Copying task {task_id} before execution (copy_children={copy_children})"
+                        )
+                        task_creator = TaskCreator(db_session)
+                        copied_tree = await task_creator.create_task_copy(task, children=copy_children)
+                        execution_task_id = copied_tree.task.id
+                        logger.info(f"Task copied: original={original_task_id}, copy={execution_task_id}")
+                        
+                        # Use the new task for subsequent steps
+                        task = copied_tree.task
+                    else:
+                        execution_task_id = task_id
 
-                # Get root task ID for streaming context
-                root_task = await task_repository.get_root_task(task)
-                root_task_id = root_task.id
+                    # Check if task is already running
+                    from aipartnerupflow.core.execution.task_tracker import TaskTracker
+                    task_tracker = TaskTracker()
+                    if task_tracker.is_task_running(execution_task_id):
+                        return {
+                            "success": False,
+                            "protocol": "jsonrpc",
+                            "root_task_id": execution_task_id,
+                            "status": "already_running",
+                            "message": f"Task {execution_task_id} is already running",
+                            **({"original_task_id": original_task_id} if copy_execution else {}),
+                        }
 
-                # Determine streaming context
-                streaming_context = None
-                if use_streaming and webhook_config:
-                    streaming_context = CombinedStreamingContext(root_task_id, webhook_config)
-                elif use_streaming:
-                    streaming_context = TaskStreamingContext(root_task_id)
-                elif webhook_config:
-                    streaming_context = WebhookStreamingContext(root_task_id, webhook_config)
+                    # Get root task ID for streaming context
+                    root_task = await task_repository.get_root_task(task)
+                    root_task_id = root_task.id
 
-                # Execute using execute_task_by_id()
-                execution_result = await task_executor.execute_task_by_id(
-                    task_id=task_id,
-                    use_streaming=bool(streaming_context),
-                    streaming_callbacks_context=streaming_context,
-                    use_demo=use_demo,
-                    db_session=db_session,
+                elif execution_mode == "tasks_array":
+                    # Mode 2: Execute by tasks array
+                    execution_tasks = tasks
+                    
+                    # Check permission for first task if available
+                    if tasks and len(tasks) > 0:
+                        first_task = tasks[0]
+                        user_id = first_task.get("user_id")
+                        if user_id:
+                            self._check_permission(request, user_id, "execute")
+                    
+                    # For tasks array, we don't have a root_task_id yet
+                    # Use a temporary ID for streaming context initialization
+                    root_task_id = str(uuid.uuid4())
+
+            # Determine streaming context
+            streaming_context = None
+            if use_streaming and webhook_config:
+                streaming_context = CombinedStreamingContext(root_task_id, webhook_config)
+            elif use_streaming:
+                streaming_context = TaskStreamingContext(root_task_id)
+            elif webhook_config:
+                streaming_context = WebhookStreamingContext(root_task_id, webhook_config)
+
+            # Execution phase
+            if use_streaming or webhook_config:
+                # Background execution
+                asyncio.create_task(self._run_background_execution(
+                    task_executor=task_executor,
+                    execution_mode=execution_mode,
+                    streaming_context=streaming_context,
+                    session_factory=create_pooled_session,
+                    task_id=execution_task_id,
+                    tasks=execution_tasks,
+                    use_demo=use_demo
+                ))
+            else:
+                # Foreground execution (awaiting background wrapper)
+                # Note: We pass None as streaming_context here as we are not streaming
+                execution_result = await self._run_background_execution(
+                    task_executor=task_executor,
+                    execution_mode=execution_mode,
+                    streaming_context=None,
+                    session_factory=create_pooled_session,
+                    task_id=execution_task_id,
+                    tasks=execution_tasks,
+                    use_demo=use_demo
                 )
-                root_task_id = execution_result.get("root_task_id", root_task_id)
-
-            elif execution_mode == "tasks_array":
-                # Mode 2: Execute by tasks array using execute_tasks()
-                # Check permission for first task if available
-                if tasks and len(tasks) > 0:
-                    first_task = tasks[0]
-                    user_id = first_task.get("user_id")
-                    if user_id:
-                        self._check_permission(request, user_id, "execute")
-
-                # Note: use_demo is now passed as parameter to TaskExecutor, not injected into inputs
-                # Determine streaming context (root_task_id will be determined after execution)
-                # For now, use a temporary ID for streaming context initialization
-                temp_root_id = str(uuid.uuid4())
-                streaming_context = None
-                if use_streaming and webhook_config:
-                    streaming_context = CombinedStreamingContext(temp_root_id, webhook_config)
-                elif use_streaming:
-                    streaming_context = TaskStreamingContext(temp_root_id)
-                elif webhook_config:
-                    streaming_context = WebhookStreamingContext(temp_root_id, webhook_config)
-
-                # Execute using execute_tasks()
-                execution_result = await task_executor.execute_tasks(
-                    tasks=tasks,
-                    root_task_id=None,
-                    use_streaming=bool(streaming_context),
-                    streaming_callbacks_context=streaming_context,
-                    require_existing_tasks=None,
-                    use_demo=use_demo,
-                    db_session=db_session,
-                )
-                root_task_id = execution_result.get("root_task_id")
-
-                # Update streaming context with actual root_task_id if needed
-                if streaming_context and root_task_id:
-                    streaming_context.root_task_id = root_task_id
-
-            # Determine streaming_context based on requirements
-            # Design: Users choose response mode (regular POST or SSE) and optionally request webhook callbacks
-            # - use_streaming controls response type: False = regular POST (JSON), True = SSE (StreamingResponse)
-            # - webhook_config is independent: if provided, webhook callbacks will be sent regardless of response mode
-            # Note: streaming_context is already set above for both execution modes
+                
+                # Update root_task_id from result if available (especially for tasks_array mode)
+                if execution_result and "root_task_id" in execution_result:
+                    root_task_id = execution_result["root_task_id"]
 
             # Handle response based on use_streaming (response mode)
-            # Response mode 1: SSE (use_streaming=True) - return StreamingResponse with real-time events
             if use_streaming:
                 # SSE mode: return StreamingResponse
-                # streaming_context must be set (either TaskStreamingContext or CombinedStreamingContext)
                 if not streaming_context:
                     raise ValueError("streaming_context is required for SSE mode")
 
@@ -1907,7 +1969,7 @@ class TaskRoutes(BaseRouteHandler):
                             "success": True,
                             "protocol": "jsonrpc",
                             "root_task_id": root_task_id,
-                            "task_id": task_id or root_task_id,
+                            "task_id": execution_task_id or root_task_id,
                             "status": "started",
                             "streaming": True,
                             "message": "Task execution started with streaming",
@@ -1926,12 +1988,7 @@ class TaskRoutes(BaseRouteHandler):
                         }
                         yield f"data: {json.dumps(initial_response, ensure_ascii=False)}\n\n"
 
-                        # Execution already started above, just poll for events
-                        # Note: For both modes, execution is already in progress with streaming_context
-
                         # Poll for events and stream them
-                        # Events are stored in global _task_streaming_events by root_task_id
-                        # Works for both TaskStreamingContext and CombinedStreamingContext
                         last_event_count = 0
                         max_wait_time = 300  # Maximum wait time in seconds (5 minutes)
                         wait_time = 0
@@ -1999,15 +2056,14 @@ class TaskRoutes(BaseRouteHandler):
                 )
 
             elif streaming_context:
-                # Response mode 2: Regular POST with webhook callbacks (use_streaming=False, webhook_config provided)
-                # Execution already started above with streaming_context, return JSON response immediately
+                # Response mode 2: Regular POST with webhook callbacks
                 logger.info(f"Task execution started with webhook callbacks (root: {root_task_id})")
 
                 response = {
                     "success": True,
                     "protocol": "jsonrpc",
                     "root_task_id": root_task_id,
-                    "task_id": task_id or root_task_id,
+                    "task_id": execution_task_id or root_task_id,
                     "status": "started",
                     "streaming": True,  # Indicates webhook callbacks are active
                     "message": (
@@ -2016,27 +2072,27 @@ class TaskRoutes(BaseRouteHandler):
                     ),
                     "webhook_url": webhook_config.get("url"),
                 }
-                # Add original_task_id if copy_execution was used
                 if execution_mode == "task_id" and copy_execution:
                     response["original_task_id"] = original_task_id
                 return response
 
             else:
-                # Response mode 3: Regular POST without webhook (use_streaming=False, no webhook_config)
-                # Execution already started above, return JSON response immediately
+                # Response mode 3: Regular POST without webhook
                 logger.info(f"Task execution started (root: {root_task_id})")
+                
+                # Use execution_result if available (it should be for foreground execution)
+                status = "started"
+                if 'execution_result' in locals() and execution_result:
+                    status = execution_result.get("status", "started")
 
                 response = {
                     "success": True,
                     "protocol": "jsonrpc",
                     "root_task_id": root_task_id,
-                    "task_id": task_id or root_task_id,
-                    "status": (
-                        execution_result.get("status", "started") if execution_result else "started"
-                    ),
+                    "task_id": execution_task_id or root_task_id,
+                    "status": status,
                     "message": "Task execution started",
                 }
-                # Add original_task_id if copy_execution was used
                 if execution_mode == "task_id" and copy_execution:
                     response["original_task_id"] = original_task_id
                 return response

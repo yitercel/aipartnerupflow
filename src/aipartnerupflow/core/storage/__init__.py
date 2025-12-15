@@ -10,6 +10,8 @@ from aipartnerupflow.core.storage.factory import (
     set_default_session,
     reset_default_session,
     # Session pool functions
+    create_pooled_session,
+    PooledSessionContext,
     create_task_tree_session,
     get_session_pool_manager,
     reset_session_pool_manager,
@@ -25,6 +27,8 @@ __all__ = [
     "set_default_session",
     "reset_default_session",
     # Session pool functions
+    "create_pooled_session",
+    "PooledSessionContext",
     "create_task_tree_session",
     "get_session_pool_manager",
     "reset_session_pool_manager",
@@ -33,4 +37,3 @@ __all__ = [
     "create_storage",
     "get_default_storage",
 ]
-

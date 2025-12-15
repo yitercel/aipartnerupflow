@@ -816,15 +816,15 @@ def get_default_storage(*args, **kwargs):
     return get_default_session(*args, **kwargs)
 
 
-class TaskTreeSession:
+class PooledSessionContext:
     """
-    Async context manager for task tree database sessions
+    Async context manager for pooled database sessions
     
     Automatically manages session lifecycle with pool limits and cleanup.
     
     Example:
-        async with TaskTreeSession() as session:
-            # Use session for task tree operations
+        async with PooledSessionContext() as session:
+            # Use session for operations
             task_manager = TaskManager(session)
             await task_manager.distribute_task_tree(task_tree)
     """
@@ -835,7 +835,7 @@ class TaskTreeSession:
         **kwargs
     ):
         """
-        Initialize TaskTreeSession context manager
+        Initialize PooledSessionContext context manager
         
         Args:
             connection_string: Database connection string (optional)
@@ -918,14 +918,14 @@ class TaskTreeSession:
         return False  # Don't suppress exceptions
 
 
-def create_task_tree_session(
+def create_pooled_session(
     connection_string: Optional[str] = None,
     **kwargs
-) -> TaskTreeSession:
+) -> PooledSessionContext:
     """
-    Create a TaskTreeSession context manager for task tree execution
+    Create a PooledSessionContext context manager for database operations
     
-    This is the recommended way to create database sessions for concurrent task tree executions.
+    This is the recommended way to create database sessions for concurrent executions.
     The session is automatically managed with pool limits and cleanup.
     
     Args:
@@ -935,15 +935,20 @@ def create_task_tree_session(
         **kwargs: Additional engine parameters
     
     Returns:
-        TaskTreeSession context manager
+        PooledSessionContext context manager
         
     Example:
-        async with create_task_tree_session() as session:
+        async with create_pooled_session() as session:
             task_executor = TaskExecutor()
             await task_executor.execute_tasks(tasks, db_session=session)
     """
-    return TaskTreeSession(
+    return PooledSessionContext(
         connection_string=connection_string,
         **kwargs
     )
+
+
+# Aliases for backward compatibility
+TaskTreeSession = PooledSessionContext
+create_task_tree_session = create_pooled_session
 
