@@ -24,8 +24,7 @@ from aipartnerupflow.core.storage.factory import (
 from aipartnerupflow.core.storage.sqlalchemy.models import Base, TaskModel
 from aipartnerupflow.core.storage.sqlalchemy.task_repository import TaskRepository
 
-# skip these tests by default
-pytestmark = pytest.mark.manual
+
 
 class TestSessionPoolManager:
     """Test SessionPoolManager basic functionality"""

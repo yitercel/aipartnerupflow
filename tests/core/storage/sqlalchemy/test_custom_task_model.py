@@ -17,8 +17,7 @@ from aipartnerupflow import (
 )
 from aipartnerupflow.core.storage.sqlalchemy.models import TaskModel, Base
 
-# skip these tests by default
-pytestmark = pytest.mark.manual
+
 
 class TestTaskModelCustomization:
     """Test TaskModel customization features"""
