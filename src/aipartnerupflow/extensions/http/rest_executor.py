@@ -122,13 +122,11 @@ class RestExecutor(BaseTask):
                             params = {}
                         params[key] = value
         
-        # Prepare request kwargs
+        # Prepare request kwargs (verify and timeout go to AsyncClient, not request)
         request_kwargs = {
             "method": method,
             "url": url,
             "headers": headers,
-            "timeout": timeout,
-            "verify": verify,
             "follow_redirects": follow_redirects,
         }
         
@@ -144,7 +142,7 @@ class RestExecutor(BaseTask):
         logger.info(f"Executing HTTP {method} request to {url}")
         
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=verify, timeout=timeout) as client:
                 # Check for cancellation before making request
                 if self.cancellation_checker and self.cancellation_checker():
                     logger.info("Request cancelled before execution")

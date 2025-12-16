@@ -389,8 +389,9 @@ class TestRestExecutor:
             })
             
             assert result["success"] is True
-            call_kwargs = mock_client_instance.request.call_args[1]
-            assert call_kwargs["timeout"] == 60.0
+            # timeout is passed to AsyncClient constructor, not request method
+            client_call_kwargs = mock_client.call_args[1]
+            assert client_call_kwargs["timeout"] == 60.0
     
     @pytest.mark.asyncio
     async def test_execute_with_ssl_verification_disabled(self):
@@ -415,8 +416,9 @@ class TestRestExecutor:
             })
             
             assert result["success"] is True
-            call_kwargs = mock_client_instance.request.call_args[1]
-            assert call_kwargs["verify"] is False
+            # verify is passed to AsyncClient constructor, not request method
+            client_call_kwargs = mock_client.call_args[1]
+            assert client_call_kwargs["verify"] is False
     
     @pytest.mark.asyncio
     async def test_get_input_schema(self):
