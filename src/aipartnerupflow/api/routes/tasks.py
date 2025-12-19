@@ -1611,9 +1611,8 @@ class TaskRoutes(BaseRouteHandler):
                 resolved_user_id = self._check_permission(request, user_id, "generate tasks for")
                 if resolved_user_id:
                     user_id = resolved_user_id
-            else:
-                # No user_id found, use None (will default to "api_user" in create_task)
-                user_id = None
+            # Note: Keep user_id as None if not found - don't use "api_user" default
+            # This ensures generated tasks use the actual user_id from BaseTask context
 
             # Check if LLM API key is available
             # Priority: context (from X-LLM-API-KEY header) > environment variables
@@ -1641,12 +1640,14 @@ class TaskRoutes(BaseRouteHandler):
                 task_repository = TaskRepository(db_session, task_model_class=get_task_model_class())
 
                 # Create generate task
+                # Use user_id from request (or None) - don't default to "api_user"
+                # This ensures generated tasks inherit the correct user_id from BaseTask context
                 generate_task = await task_repository.create_task(
                     name="generate_executor",
-                    user_id=user_id or "api_user",
+                    user_id=user_id,  # Use actual user_id or None (not "api_user")
                     inputs={
                         "requirement": requirement,
-                        "user_id": user_id,
+                        "user_id": user_id,  # Pass user_id to executor inputs
                         "llm_provider": llm_provider,
                         "model": model,
                         "temperature": temperature,

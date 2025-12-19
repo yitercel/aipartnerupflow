@@ -441,14 +441,27 @@ class GenerateExecutor(BaseTask):
         # Step 2: Track ID mappings for updating references
         id_mapping: Dict[str, str] = {}  # old_id -> new_uuid
         
-        # Step 3: Fix all task IDs to be UUIDs
+        # Step 3: Fix all task IDs to be UUIDs and ensure correct user_id
         for task in tasks:
-            # Fix user_id: use BaseTask.user_id if task doesn't have it or has wrong value
+            # Fix user_id: ALWAYS use BaseTask.user_id (self.user_id) to override any LLM-generated value
+            # This ensures generated tasks use the correct user_id from the request context,
+            # not hardcoded values like "api_user" that LLM might generate
             if user_id:
+                # Use provided user_id (from BaseTask context)
                 task["user_id"] = user_id
+            elif self.user_id:
+                # Fallback to self.user_id if parameter not provided
+                task["user_id"] = self.user_id
             elif "user_id" not in task:
-                # If no user_id in BaseTask and task doesn't have it, set to None
+                # If no user_id available, set to None (don't use hardcoded "api_user")
                 task["user_id"] = None
+            else:
+                # Task has user_id but it might be wrong (e.g., "api_user" from LLM)
+                # If we have self.user_id, use it; otherwise keep existing (but log warning)
+                if self.user_id and task.get("user_id") == "api_user":
+                    # Override "api_user" with actual user_id from BaseTask
+                    task["user_id"] = self.user_id
+                    logger.debug(f"Overrode LLM-generated 'api_user' with actual user_id '{self.user_id}' for task '{task.get('name')}'")
             
             # Fix task ID: ensure it's a valid UUID
             old_id = task.get("id")
