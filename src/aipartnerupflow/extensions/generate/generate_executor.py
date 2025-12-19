@@ -8,6 +8,7 @@ TaskCreator.create_task_tree_from_array().
 
 import json
 import re
+import uuid
 from typing import Dict, Any, List, Optional, Set
 from aipartnerupflow.core.base import BaseTask
 from aipartnerupflow.core.extensions.decorators import executor_register
@@ -145,6 +146,9 @@ class GenerateExecutor(BaseTask):
                     "tasks": []
                 }
             
+            # Post-process tasks: ensure UUID format IDs and correct user_id
+            tasks = self._post_process_tasks(tasks, user_id=user_id)
+            
             # Validate tasks
             validation_result = self._validate_tasks_array(tasks)
             if not validation_result["valid"]:
@@ -153,12 +157,6 @@ class GenerateExecutor(BaseTask):
                     "error": f"Validation failed: {validation_result['error']}",
                     "tasks": tasks  # Return tasks anyway for debugging
                 }
-            
-            # Set user_id if provided
-            if user_id:
-                for task in tasks:
-                    if "user_id" not in task:
-                        task["user_id"] = user_id
             
             logger.info(f"Successfully generated {len(tasks)} tasks")
             return {
@@ -215,9 +213,10 @@ class GenerateExecutor(BaseTask):
             "   - Example: Task B depends on Task A → Task B must have parent_id='task_a' AND dependencies=[{'id': 'task_a'}]",
             "",
             "2. Task identification:",
-            "   - Either ALL tasks have 'id' field, or NONE do (no mixing)",
-            "   - If using 'id', all references (parent_id, dependencies) must use 'id'",
-            "   - If not using 'id', references can use 'name'",
+            "   - ALL tasks MUST have 'id' field with UUID format (e.g., '550e8400-e29b-41d4-a716-446655440000')",
+            "   - Task IDs must be valid UUIDs (36 characters: 8-4-4-4-12 format)",
+            "   - All references (parent_id, dependencies) must use 'id'",
+            "   - Generate unique UUIDs for each task using UUID v4 format",
             "",
             "3. Tree structure (CRITICAL):",
             "   - Exactly ONE root task (task with no parent_id and no dependencies)",
@@ -234,8 +233,8 @@ class GenerateExecutor(BaseTask):
             "=== Task Object Structure ===",
             "{",
             '  "name": "executor_id",        // REQUIRED: Must match available executor ID exactly',
-            '  "id": "task_1",               // OPTIONAL: If used, ALL tasks must have id',
-            '  "user_id": "user123",         // OPTIONAL: User identifier',
+            '  "id": "550e8400-e29b-41d4-a716-446655440000",  // REQUIRED: UUID v4 format (36 chars)',
+            '  "user_id": "user123",         // REQUIRED: User identifier (use the provided user_id)',
             '  "priority": 1,                // OPTIONAL: 0=urgent, 1=high, 2=normal, 3=low (default: 1)',
             '  "inputs": {                   // OPTIONAL: Executor-specific input parameters',
             '    "param1": "value1",         // Must match executor input schema',
@@ -304,8 +303,9 @@ class GenerateExecutor(BaseTask):
             "Example output structure:",
             json.dumps([
                 {
-                    "id": "task_1",
+                    "id": "550e8400-e29b-41d4-a716-446655440000",
                     "name": "rest_executor",
+                    "user_id": "user123",
                     "inputs": {
                         "url": "https://api.example.com/data",
                         "method": "GET",
@@ -315,20 +315,22 @@ class GenerateExecutor(BaseTask):
                     # No parent_id = root task
                 },
                 {
-                    "id": "task_2",
+                    "id": "660e8400-e29b-41d4-a716-446655440001",
                     "name": "command_executor",
-                    "parent_id": "task_1",  # REQUIRED: parent_id = first dependency
-                    "dependencies": [{"id": "task_1", "required": True}],
+                    "user_id": "user123",
+                    "parent_id": "550e8400-e29b-41d4-a716-446655440000",  # REQUIRED: parent_id = first dependency
+                    "dependencies": [{"id": "550e8400-e29b-41d4-a716-446655440000", "required": True}],
                     "inputs": {
                         "command": "python process_data.py --input /tmp/api_response.json --output /tmp/processed.json"
                     },
                     "priority": 2
                 },
                 {
-                    "id": "task_3",
+                    "id": "770e8400-e29b-41d4-a716-446655440002",
                     "name": "rest_executor",
-                    "parent_id": "task_2",  # REQUIRED: parent_id = previous task in chain
-                    "dependencies": [{"id": "task_2", "required": True}],
+                    "user_id": "user123",
+                    "parent_id": "660e8400-e29b-41d4-a716-446655440001",  # REQUIRED: parent_id = previous task in chain
+                    "dependencies": [{"id": "660e8400-e29b-41d4-a716-446655440001", "required": True}],
                     "inputs": {
                         "url": "https://api.example.com/notify",
                         "method": "POST",
@@ -344,8 +346,8 @@ class GenerateExecutor(BaseTask):
             "3. Tasks with dependencies: parent_id = FIRST dependency",
             "4. Parallel tasks: Choose one as root, others have parent_id = root",
             "5. Example: If Task B depends on [Task A, Task C], then:",
-            "   - Task B.parent_id = 'task_a' (first dependency)",
-            "   - Task B.dependencies = [{'id': 'task_a'}, {'id': 'task_c'}]",
+            "   - Task B.parent_id = '550e8400-e29b-41d4-a716-446655440000' (first dependency's UUID)",
+            "   - Task B.dependencies = [{'id': '550e8400-e29b-41d4-a716-446655440000'}, {'id': '660e8400-e29b-41d4-a716-446655440001'}]",
             "",
         ]
         
@@ -399,6 +401,134 @@ class GenerateExecutor(BaseTask):
         for i, task in enumerate(tasks):
             if not isinstance(task, dict):
                 raise ValueError(f"Task at index {i} is not a dictionary, got {type(task)}")
+        
+        return tasks
+    
+    def _post_process_tasks(self, tasks: List[Dict[str, Any]], user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Post-process generated tasks to ensure correct format
+        
+        - Ensures all tasks have UUID format IDs
+        - Ensures all tasks have correct user_id from BaseTask
+        - Ensures all dependencies references use correct UUID IDs
+        
+        Args:
+            tasks: List of task dictionaries from LLM
+            user_id: User ID from BaseTask (self.user_id)
+            
+        Returns:
+            Post-processed list of task dictionaries
+        """
+        # Get user_id from BaseTask if not provided
+        if not user_id:
+            user_id = self.user_id
+        
+        # UUID validation regex (UUID v4 format: 8-4-4-4-12)
+        uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$', re.IGNORECASE)
+        
+        # Step 1: Build task ID mapping (name -> task) for reference lookup
+        name_to_task: Dict[str, Dict[str, Any]] = {}
+        id_to_task: Dict[str, Dict[str, Any]] = {}
+        
+        for task in tasks:
+            task_name = task.get("name")
+            task_id = task.get("id")
+            if task_name:
+                name_to_task[task_name] = task
+            if task_id:
+                id_to_task[task_id] = task
+        
+        # Step 2: Track ID mappings for updating references
+        id_mapping: Dict[str, str] = {}  # old_id -> new_uuid
+        
+        # Step 3: Fix all task IDs to be UUIDs
+        for task in tasks:
+            # Fix user_id: use BaseTask.user_id if task doesn't have it or has wrong value
+            if user_id:
+                task["user_id"] = user_id
+            elif "user_id" not in task:
+                # If no user_id in BaseTask and task doesn't have it, set to None
+                task["user_id"] = None
+            
+            # Fix task ID: ensure it's a valid UUID
+            old_id = task.get("id")
+            if old_id:
+                # Check if it's a valid UUID
+                if not uuid_pattern.match(old_id):
+                    # Generate new UUID and track mapping
+                    new_id = str(uuid.uuid4())
+                    id_mapping[old_id] = new_id
+                    task["id"] = new_id
+                    logger.debug(f"Generated new UUID for task '{task.get('name')}': {old_id} -> {new_id}")
+                # If it's already a valid UUID, keep it
+            else:
+                # No ID provided, generate one
+                new_id = str(uuid.uuid4())
+                task["id"] = new_id
+                logger.debug(f"Generated UUID for task '{task.get('name')}': {new_id}")
+        
+        # Step 4: Update all references (parent_id and dependencies) with correct UUIDs
+        for task in tasks:
+            # Update parent_id
+            if "parent_id" in task and task["parent_id"]:
+                parent_ref = task["parent_id"]
+                # Check if parent_ref needs to be mapped
+                if parent_ref in id_mapping:
+                    task["parent_id"] = id_mapping[parent_ref]
+                # If parent_ref is not a UUID, try to find the task by name and use its ID
+                elif not uuid_pattern.match(parent_ref):
+                    if parent_ref in name_to_task:
+                        task["parent_id"] = name_to_task[parent_ref]["id"]
+                        logger.debug(f"Updated parent_id for task '{task.get('name')}': {parent_ref} -> {name_to_task[parent_ref]['id']}")
+                    elif parent_ref in id_to_task:
+                        # Parent ref exists but was mapped, use the mapped ID
+                        mapped_id = id_mapping.get(parent_ref)
+                        if mapped_id:
+                            task["parent_id"] = mapped_id
+                
+                # Final validation: ensure parent_id is a valid UUID
+                if task["parent_id"] and not uuid_pattern.match(task["parent_id"]):
+                    logger.warning(f"Task '{task.get('name')}' has invalid parent_id '{task['parent_id']}', removing it")
+                    task.pop("parent_id", None)
+            
+            # Update dependencies - ensure all dependency IDs are correct UUIDs
+            if "dependencies" in task and isinstance(task["dependencies"], list):
+                updated_deps = []
+                for dep in task["dependencies"]:
+                    if isinstance(dep, dict):
+                        dep_id = dep.get("id")
+                        if dep_id:
+                            # Check if dep_id needs to be mapped
+                            if dep_id in id_mapping:
+                                dep["id"] = id_mapping[dep_id]
+                                updated_deps.append(dep)
+                            # If dep_id is not a UUID, try to find the task by name and use its ID
+                            elif not uuid_pattern.match(dep_id):
+                                if dep_id in name_to_task:
+                                    dep["id"] = name_to_task[dep_id]["id"]
+                                    updated_deps.append(dep)
+                                    logger.debug(f"Updated dependency id for task '{task.get('name')}': {dep_id} -> {name_to_task[dep_id]['id']}")
+                                elif dep_id in id_to_task:
+                                    # Dep ref exists but was mapped, use the mapped ID
+                                    mapped_id = id_mapping.get(dep_id)
+                                    if mapped_id:
+                                        dep["id"] = mapped_id
+                                        updated_deps.append(dep)
+                                else:
+                                    # Invalid dependency reference, skip it
+                                    logger.warning(f"Task '{task.get('name')}' has invalid dependency id '{dep_id}', skipping it")
+                            else:
+                                # Valid UUID, keep it
+                                updated_deps.append(dep)
+                        else:
+                            # No id in dependency, skip it
+                            logger.warning(f"Task '{task.get('name')}' has dependency without 'id' field, skipping it")
+                    else:
+                        # Invalid dependency format, skip it
+                        logger.warning(f"Task '{task.get('name')}' has invalid dependency format, skipping it")
+                
+                # Update dependencies list
+                task["dependencies"] = updated_deps
         
         return tasks
     

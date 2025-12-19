@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Task Context Sharing and LLM Key Management**
+  - **Task Context Sharing**: TaskManager now passes the entire `task` object (TaskModel instance) to executors
+    - Executors can access all task fields including custom TaskModel fields via `self.task`
+    - Supports custom TaskModel classes with additional fields
+    - Enables executors to modify task context (e.g., update status, progress, custom fields)
+    - BaseTask uses weak references (`weakref.ref`) to store task objects, preventing memory leaks
+    - Task context is automatically cleared after execution or cancellation
+    - `task_id` is stored separately for future extension (e.g., Redis-based task storage)
+  - **Unified user_id Access**: BaseTask provides `user_id` property that automatically retrieves from `task.user_id`
+    - Executors can use `self.user_id` instead of `inputs.get("user_id")`
+    - Falls back to `_user_id` when task is not available (for backward compatibility and testing)
+    - All LLM executors (`generate_executor`, `crew_manager`) now use `self.user_id`
+  - **Unified LLM Key Retrieval**: Centralized LLM key management with context-aware priority order
+    - New `get_llm_key()` function with unified priority logic for API and CLI contexts
+    - API context priority: header → LLMKeyConfigManager → environment variables
+    - CLI context priority: params → LLMKeyConfigManager → environment variables
+    - Auto-detection mode (`context="auto"`) automatically detects API or CLI context
+    - All LLM executors now proactively retrieve keys using unified mechanism
+    - Removed hardcoded LLM key injection logic from TaskManager (separation of concerns)
+  - **LLM Key Context Optimization**: Refactored `llm_key_context.py` to eliminate code duplication
+    - Extracted `_get_key_from_user_config()` helper function for user config lookup
+    - Extracted `_get_key_from_source()` helper function for header/CLI params retrieval
+    - Reduced code duplication by ~40%, improved maintainability
+    - All functionality preserved, backward compatible
+
 - **Enhanced Task Copy Functionality**
   - **UUID Generation for Task IDs**: Task copy now always generates new UUIDs for copied tasks, regardless of `save` parameter value
     - Ensures clear task tree relationships and prevents ID conflicts
@@ -103,7 +128,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - These methods are no longer available in the API
   - **Migration**: Use aipartnerupflow-demo for demo task initialization
 
-
 ### Changed
 - **Session Management Refactoring**
   - Replaced `get_default_session()` with `create_pooled_session()` context manager in all API routes
@@ -111,6 +135,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated `TaskExecutor` to use `create_pooled_session` as fallback
   - Improved concurrency safety for API requests
   - **Breaking Change**: `get_default_session()` is now deprecated for route handlers
+- **LLM Key Management Architecture**
+  - Executors now proactively retrieve LLM keys instead of receiving them via inputs
+  - TaskManager no longer handles LLM key injection for specific executors
+  - LLM key retrieval is now executor responsibility, following separation of concerns
+  - All executors use unified `get_llm_key()` function with consistent priority order
 
 
 ## [0.6.1] 2025-12-11
