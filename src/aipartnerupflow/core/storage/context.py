@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aipartnerupflow.core.storage.factory import (
     get_default_session,
+    create_pooled_session,
 )
 from aipartnerupflow.core.utils.logger import get_logger
 
@@ -83,10 +84,17 @@ async def with_db_session_context(
     """
     session: Optional[Union[Session, AsyncSession]] = None
     old_session = get_request_session()
+    pooled_context = None
     
     try:
-        # Always use default session (session pool is not used)
-        session = get_default_session()
+        if use_pool:
+            # Use pooled session to ensure it's created in the current event loop
+            # This prevents "Task got Future attached to a different loop" errors
+            pooled_context = create_pooled_session()
+            session = await pooled_context.__aenter__()
+        else:
+            # Use default session for backward compatibility
+            session = get_default_session()
         
         # Set session in context
         set_request_session(session)
@@ -120,6 +128,13 @@ async def with_db_session_context(
                 logger.error(f"Error rolling back session: {str(rollback_error)}", exc_info=True)
         raise
     finally:
+        # Clean up pooled session if used
+        if pooled_context is not None:
+            try:
+                await pooled_context.__aexit__(None, None, None)
+            except Exception as e:
+                logger.warning(f"Error closing pooled session: {str(e)}")
+        
         # Restore old session in context
         if old_session is not None:
             set_request_session(old_session)

@@ -32,79 +32,10 @@ class TestSessionPoolManager:
     def setup_method(self):
         """Reset session pool manager before each test"""
         reset_session_pool_manager()
-        # Ensure Base.metadata is clean (no custom columns from previous tests)
-        self._ensure_clean_metadata()
     
     def teardown_method(self):
         """Clean up after each test"""
         reset_session_pool_manager()
-    
-    def _ensure_clean_metadata(self):
-        """Ensure Base.metadata is clean and doesn't have custom columns"""
-        global Base, TaskModel
-        from aipartnerupflow.core.storage.sqlalchemy.models import TASK_TABLE_NAME
-        if TASK_TABLE_NAME in Base.metadata.tables:
-            table = Base.metadata.tables[TASK_TABLE_NAME]
-            # Check for common custom columns that shouldn't be in default TaskModel
-            custom_columns = {'project_id', 'priority_level', 'department'}
-            actual_columns = {c.name for c in table.columns}
-            found_custom = custom_columns & actual_columns
-            if found_custom:
-                # Metadata is polluted, need to completely clean it
-                import importlib
-                import sys
-                from sqlalchemy.orm import configure_mappers
-                from sqlalchemy.inspection import inspect as sa_inspect
-                
-                # Step 1: Remove the polluted table from Base.metadata
-                if TASK_TABLE_NAME in Base.metadata.tables:
-                    Base.metadata.remove(Base.metadata.tables[TASK_TABLE_NAME])
-                
-                # Step 2: Reload the models module to get fresh Base and TaskModel
-                if 'aipartnerupflow.core.storage.sqlalchemy.models' in sys.modules:
-                    # Delete the module to force complete reload
-                    del sys.modules['aipartnerupflow.core.storage.sqlalchemy.models']
-                
-                # Step 3: Re-import to get clean Base and TaskModel
-                from aipartnerupflow.core.storage.sqlalchemy.models import Base as CleanBase, TaskModel as CleanTaskModel
-                
-                # Step 4: Ensure the clean Base.metadata has the correct table definition
-                if TASK_TABLE_NAME not in CleanBase.metadata.tables:
-                    # Force table creation by accessing TaskModel.__table__
-                    _ = CleanTaskModel.__table__
-                
-                # Step 5: Ensure mapper is configured
-                configure_mappers()
-                
-                # Step 6: Verify mapper exists and is clean
-                try:
-                    mapper = sa_inspect(CleanTaskModel)
-                    if hasattr(mapper, 'columns'):
-                        mapper_columns = {col.key for col in mapper.columns}
-                        # Verify no custom columns in mapper
-                        if custom_columns & mapper_columns:
-                            # Still polluted, try one more time with clear_mappers
-                            from sqlalchemy.orm import clear_mappers
-                            clear_mappers()
-                            # Re-access __table__ to recreate mapper
-                            _ = CleanTaskModel.__table__
-                            configure_mappers()
-                except Exception:
-                    # If inspection fails, force mapper creation by accessing __table__
-                    _ = CleanTaskModel.__table__
-                    configure_mappers()
-                
-                # Step 7: Update global Base and TaskModel references
-                import aipartnerupflow.core.storage.sqlalchemy.models as models_module
-                models_module.Base = CleanBase
-                models_module.TaskModel = CleanTaskModel
-                
-                # Step 8: Update Base and TaskModel in this module
-                Base = CleanBase
-                TaskModel = CleanTaskModel
-                
-                # Step 9: Force access to __table__ to ensure mapper is created
-                _ = CleanTaskModel.__table__
     
     def test_session_pool_manager_initialization(self):
         """Test SessionPoolManager can be initialized"""
@@ -247,79 +178,10 @@ class TestTaskTreeSession:
     def setup_method(self):
         """Reset session pool manager before each test"""
         reset_session_pool_manager()
-        # Ensure Base.metadata is clean
-        self._ensure_clean_metadata()
     
     def teardown_method(self):
         """Clean up after each test"""
         reset_session_pool_manager()
-    
-    def _ensure_clean_metadata(self):
-        """Ensure Base.metadata is clean and doesn't have custom columns"""
-        global Base, TaskModel
-        from aipartnerupflow.core.storage.sqlalchemy.models import TASK_TABLE_NAME
-        if TASK_TABLE_NAME in Base.metadata.tables:
-            table = Base.metadata.tables[TASK_TABLE_NAME]
-            # Check for common custom columns that shouldn't be in default TaskModel
-            custom_columns = {'project_id', 'priority_level', 'department'}
-            actual_columns = {c.name for c in table.columns}
-            found_custom = custom_columns & actual_columns
-            if found_custom:
-                # Metadata is polluted, need to completely clean it
-                import importlib
-                import sys
-                from sqlalchemy.orm import configure_mappers
-                from sqlalchemy.inspection import inspect as sa_inspect
-                
-                # Step 1: Remove the polluted table from Base.metadata
-                if TASK_TABLE_NAME in Base.metadata.tables:
-                    Base.metadata.remove(Base.metadata.tables[TASK_TABLE_NAME])
-                
-                # Step 2: Reload the models module to get fresh Base and TaskModel
-                if 'aipartnerupflow.core.storage.sqlalchemy.models' in sys.modules:
-                    # Delete the module to force complete reload
-                    del sys.modules['aipartnerupflow.core.storage.sqlalchemy.models']
-                
-                # Step 3: Re-import to get clean Base and TaskModel
-                from aipartnerupflow.core.storage.sqlalchemy.models import Base as CleanBase, TaskModel as CleanTaskModel
-                
-                # Step 4: Ensure the clean Base.metadata has the correct table definition
-                if TASK_TABLE_NAME not in CleanBase.metadata.tables:
-                    # Force table creation by accessing TaskModel.__table__
-                    _ = CleanTaskModel.__table__
-                
-                # Step 5: Ensure mapper is configured
-                configure_mappers()
-                
-                # Step 6: Verify mapper exists and is clean
-                try:
-                    mapper = sa_inspect(CleanTaskModel)
-                    if hasattr(mapper, 'columns'):
-                        mapper_columns = {col.key for col in mapper.columns}
-                        # Verify no custom columns in mapper
-                        if custom_columns & mapper_columns:
-                            # Still polluted, try one more time with clear_mappers
-                            from sqlalchemy.orm import clear_mappers
-                            clear_mappers()
-                            # Re-access __table__ to recreate mapper
-                            _ = CleanTaskModel.__table__
-                            configure_mappers()
-                except Exception:
-                    # If inspection fails, force mapper creation by accessing __table__
-                    _ = CleanTaskModel.__table__
-                    configure_mappers()
-                
-                # Step 7: Update global Base and TaskModel references
-                import aipartnerupflow.core.storage.sqlalchemy.models as models_module
-                models_module.Base = CleanBase
-                models_module.TaskModel = CleanTaskModel
-                
-                # Step 8: Update Base and TaskModel in this module
-                Base = CleanBase
-                TaskModel = CleanTaskModel
-                
-                # Step 9: Force access to __table__ to ensure mapper is created
-                _ = CleanTaskModel.__table__
     
     @pytest.mark.asyncio
     async def test_task_tree_session_context_manager(self, tmp_path):
@@ -407,79 +269,10 @@ class TestSessionPoolWithTaskExecutor:
     def setup_method(self):
         """Reset session pool manager before each test"""
         reset_session_pool_manager()
-        # Ensure Base.metadata is clean
-        self._ensure_clean_metadata()
     
     def teardown_method(self):
         """Clean up after each test"""
         reset_session_pool_manager()
-    
-    def _ensure_clean_metadata(self):
-        """Ensure Base.metadata is clean and doesn't have custom columns"""
-        global Base, TaskModel
-        from aipartnerupflow.core.storage.sqlalchemy.models import TASK_TABLE_NAME
-        if TASK_TABLE_NAME in Base.metadata.tables:
-            table = Base.metadata.tables[TASK_TABLE_NAME]
-            # Check for common custom columns that shouldn't be in default TaskModel
-            custom_columns = {'project_id', 'priority_level', 'department'}
-            actual_columns = {c.name for c in table.columns}
-            found_custom = custom_columns & actual_columns
-            if found_custom:
-                # Metadata is polluted, need to completely clean it
-                import importlib
-                import sys
-                from sqlalchemy.orm import configure_mappers
-                from sqlalchemy.inspection import inspect as sa_inspect
-                
-                # Step 1: Remove the polluted table from Base.metadata
-                if TASK_TABLE_NAME in Base.metadata.tables:
-                    Base.metadata.remove(Base.metadata.tables[TASK_TABLE_NAME])
-                
-                # Step 2: Reload the models module to get fresh Base and TaskModel
-                if 'aipartnerupflow.core.storage.sqlalchemy.models' in sys.modules:
-                    # Delete the module to force complete reload
-                    del sys.modules['aipartnerupflow.core.storage.sqlalchemy.models']
-                
-                # Step 3: Re-import to get clean Base and TaskModel
-                from aipartnerupflow.core.storage.sqlalchemy.models import Base as CleanBase, TaskModel as CleanTaskModel
-                
-                # Step 4: Ensure the clean Base.metadata has the correct table definition
-                if TASK_TABLE_NAME not in CleanBase.metadata.tables:
-                    # Force table creation by accessing TaskModel.__table__
-                    _ = CleanTaskModel.__table__
-                
-                # Step 5: Ensure mapper is configured
-                configure_mappers()
-                
-                # Step 6: Verify mapper exists and is clean
-                try:
-                    mapper = sa_inspect(CleanTaskModel)
-                    if hasattr(mapper, 'columns'):
-                        mapper_columns = {col.key for col in mapper.columns}
-                        # Verify no custom columns in mapper
-                        if custom_columns & mapper_columns:
-                            # Still polluted, try one more time with clear_mappers
-                            from sqlalchemy.orm import clear_mappers
-                            clear_mappers()
-                            # Re-access __table__ to recreate mapper
-                            _ = CleanTaskModel.__table__
-                            configure_mappers()
-                except Exception:
-                    # If inspection fails, force mapper creation by accessing __table__
-                    _ = CleanTaskModel.__table__
-                    configure_mappers()
-                
-                # Step 7: Update global Base and TaskModel references
-                import aipartnerupflow.core.storage.sqlalchemy.models as models_module
-                models_module.Base = CleanBase
-                models_module.TaskModel = CleanTaskModel
-                
-                # Step 8: Update Base and TaskModel in this module
-                Base = CleanBase
-                TaskModel = CleanTaskModel
-                
-                # Step 9: Force access to __table__ to ensure mapper is created
-                _ = CleanTaskModel.__table__
     
     @pytest.mark.asyncio
     async def test_task_executor_with_task_tree_session(self, tmp_path):
@@ -706,30 +499,12 @@ class TestSessionPoolWithTaskExecutor:
     async def test_concurrent_execution_no_data_conflicts(self, tmp_path):
         """Test that concurrent executions don't cause data conflicts"""
         import uuid
-        import sys
         from aipartnerupflow.core.execution.task_executor import TaskExecutor
         from aipartnerupflow.core.types import TaskTreeNode
         from aipartnerupflow.core.storage.sqlalchemy.task_repository import TaskRepository
         
-        # Ensure we use a clean TaskModel by re-importing it
-        # This is necessary because Base.metadata might be polluted by previous tests
-        if 'aipartnerupflow.core.storage.sqlalchemy.models' in sys.modules:
-            import importlib
-            importlib.reload(sys.modules['aipartnerupflow.core.storage.sqlalchemy.models'])
+        # Use default TaskModel - setup_method already ensures clean metadata
         from aipartnerupflow.core.storage.sqlalchemy.models import TaskModel as CleanTaskModel, Base as CleanBase
-        from sqlalchemy.orm import configure_mappers
-        
-        # Force clean metadata and mapper
-        from aipartnerupflow.core.storage.sqlalchemy.models import TASK_TABLE_NAME
-        if TASK_TABLE_NAME in CleanBase.metadata.tables:
-            table = CleanBase.metadata.tables[TASK_TABLE_NAME]
-            custom_columns = {'project_id', 'priority_level', 'department'}
-            actual_columns = {c.name for c in table.columns}
-            if custom_columns & actual_columns:
-                # Metadata is polluted, remove and recreate
-                CleanBase.metadata.remove(table)
-                _ = CleanTaskModel.__table__
-                configure_mappers()
         
         db_path = tmp_path / "test.duckdb"
         connection_string = f"duckdb:///{db_path}"
