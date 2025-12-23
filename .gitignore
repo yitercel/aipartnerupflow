@@ -38,6 +38,7 @@ ENV/
 .coverage
 htmlcov/
 .tox/
+.mypy_cache/
 
 # Documentation
 docs/_build/

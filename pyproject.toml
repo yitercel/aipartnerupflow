@@ -65,8 +65,7 @@ postgres = [
 
 # CrewAI LLM task support (includes BatchManager)
 crewai = [
-    "crewai[tools]>=0.152.0,<1.0.0",
-    "crewai-tools>=0.59.0,<1.0.0",
+    "crewai[tools]>=1.4.1",
     # Fix compatibility issue: aiodns 3.6.0 is incompatible with pycares 5.0.0
     # aiodns 3.6.1+ works with pycares 4.x, and pip will automatically resolve pycares version
     "aiodns>=3.6.1",

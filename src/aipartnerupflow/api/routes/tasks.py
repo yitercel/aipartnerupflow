@@ -25,8 +25,17 @@ from aipartnerupflow.core.utils.helpers import tree_node_to_dict
 logger = get_logger(__name__)
 
 # Global event storage for task streaming (keyed by root_task_id)
+# Global event storage for task streaming (keyed by root_task_id)
 _task_streaming_events: Dict[str, List[Dict[str, Any]]] = {}
-_task_streaming_events_lock = asyncio.Lock()
+_task_streaming_events_lock: Optional[asyncio.Lock] = None
+
+
+def _get_streaming_events_lock() -> asyncio.Lock:
+    """Get or create the global lock for streaming events"""
+    global _task_streaming_events_lock
+    if _task_streaming_events_lock is None:
+        _task_streaming_events_lock = asyncio.Lock()
+    return _task_streaming_events_lock
 
 
 class TaskStreamingContext:
@@ -61,7 +70,7 @@ class TaskStreamingContext:
                         break
 
                     # Store update in global event store
-                    async with _task_streaming_events_lock:
+                    async with _get_streaming_events_lock():
                         if self.root_task_id not in _task_streaming_events:
                             _task_streaming_events[self.root_task_id] = []
                         _task_streaming_events[self.root_task_id].append(update_data)
@@ -69,6 +78,8 @@ class TaskStreamingContext:
                     self._update_queue.task_done()
                 except Exception as e:
                     logger.error(f"Error in streaming bridge worker: {str(e)}")
+                    # Break loop on error to prevent infinite busy loop
+                    break
 
         self._bridge_task = asyncio.create_task(bridge_worker())
 
@@ -98,7 +109,7 @@ async def get_task_streaming_events(root_task_id: str) -> List[Dict[str, Any]]:
     Returns:
         List of streaming events
     """
-    async with _task_streaming_events_lock:
+    async with _get_streaming_events_lock():
         return _task_streaming_events.get(root_task_id, []).copy()
 
 
@@ -158,6 +169,8 @@ class WebhookStreamingContext:
                     self._update_queue.task_done()
                 except Exception as e:
                     logger.error(f"Error in webhook bridge worker: {str(e)}")
+                    # Break loop on error to prevent infinite busy loop
+                    break
 
         self._bridge_task = asyncio.create_task(bridge_worker())
 

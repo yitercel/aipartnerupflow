@@ -926,7 +926,12 @@ def all(
                 return task_dicts
             finally:
                 # Ensure session is properly closed
-                await db_session.close()
+                # Ensure session is properly closed
+                from sqlalchemy.ext.asyncio import AsyncSession
+                if isinstance(db_session, AsyncSession):
+                    await db_session.close()
+                else:
+                    db_session.close()
         
         tasks = run_async_safe(get_all_tasks())
         typer.echo(json.dumps(tasks, indent=2))
