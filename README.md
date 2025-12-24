@@ -341,7 +341,7 @@ See [docs/architecture/DIRECTORY_STRUCTURE.md](docs/architecture/DIRECTORY_STRUC
 - [Contributing Guide](docs/development/contributing.md)
 - [Architecture Overview](docs/architecture/overview.md)
 
-Full documentation is also available at [docs.aipartnerup.com](https://docs.aipartnerup.com).
+Full documentation is also available at [flow-docs.aipartnerup.com](https://flow-docs.aipartnerup.com).
 
 ## 🤝 Contributing
 
