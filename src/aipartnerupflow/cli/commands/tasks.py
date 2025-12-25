@@ -154,7 +154,7 @@ def status(
 def count(
     user_id: Optional[str] = typer.Option(None, "--user-id", "-u", help="Filter by user ID"),
     root_only: bool = typer.Option(False, "--root-only", "-r", help="Count only root tasks (task trees)"),
-    output_format: str = typer.Option("json", "--format", "-f", help="Output format: json or table"),
+    output_format: str = typer.Option("table", "--format", "-f", help="Output format: json or table"),
 ):
     """
     Get count of tasks from database, grouped by status

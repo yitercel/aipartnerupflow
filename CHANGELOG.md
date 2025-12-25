@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] 2025-12-25
 
 ### Added
 - **LLM Executor Integration**
@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Automatic API key handling via `LLMKeyConfigManager` or environment variables
   - Auto-registration via extensions mechanism
   - Added `[llm]` optional dependency including `litellm`
+
+- **CLI: Plugin Mechanism for Extensions**
+  - Added `CLIExtension` class to facilitate creating CLI subcommands in external projects.
+  - Implemented dynamic subcommands discovery using Python `entry_points` (`aipartnerupflow.cli_plugins`).
+  - Allows projects like `aipartnerupflow-demo` to register commands (e.g., `apflow users stat`) without modifying the core library.
+  - Supports both full `typer.Typer` apps and single-command callables as plugins.
+
+- **CLI: Improved Task Count Output**
+  * Changed default output format of `apflow tasks count` from `json` to `table` for better terminal readability.
 
 ### Changed
 - **CLI: Simplified `apflow tasks` commands**

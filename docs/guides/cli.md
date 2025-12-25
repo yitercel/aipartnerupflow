@@ -853,3 +853,21 @@ psql $DATABASE_URL -c "SELECT COUNT(*) FROM apflow_tasks;"
 
 Use CLI for local development and automation, use API server for production deployment and remote access.
 
+## CLI Extension (Dynamic Plugins)
+
+The `apflow` CLI supports dynamic discovery of subcommands through Python's `entry_points` mechanism. This allows external projects to add their own command groups directly to the main CLI without modifying the core library.
+
+### Unified Entry Point
+
+Users always use the same consistent entry point:
+- `aipartnerupflow <your-plugin-name> <command>`
+- `apflow <your-plugin-name> <command>`
+
+### Example: Users Extension
+If a plugin registers a command group called `users`, a user can simply run:
+```bash
+apflow users stat
+```
+
+For more details on how to develop these extensions, see the [Extending Guide](../development/extending.md#creating-cli-extensions).
+
