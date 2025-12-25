@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.4]
+## [Unreleased]
 
 ### Added
 - **LLM Executor Integration**
@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Automatic API key handling via `LLMKeyConfigManager` or environment variables
   - Auto-registration via extensions mechanism
   - Added `[llm]` optional dependency including `litellm`
+
+### Changed
+- **CLI: Simplified `apflow tasks` commands**
+  - `apflow tasks count` now defaults to providing comprehensive database statistics grouped by status.
+  - Removed redundant `--all` and `--status` flags from `count` command (database statistics are now the default).
+  - Renamed `apflow tasks all` command to `apflow tasks list` for better alignment with API naming conventions.
+  - Removed the legacy `apflow tasks list` command (which only showed running tasks).
+  - The new `apflow tasks list` command now lists all tasks from the database with support for filtering and pagination.
+
+### Fixed
+- **Tests: Infrastructure and LLM Integration**
+  - Updated `tests/conftest.py` to automatically load `.env` file environment variables at the start of the test session.
+  - Added auto-registration for `LLMExecutor` in the test `conftest.py` fixture.
+  - Fixed `LLMExecutor` integration tests to correctly use real API keys from `.env` when available.
 
 ## [0.7.3] 2025-12-22
 
